@@ -3,6 +3,7 @@
 Note: this module is named 'osm' instead of 'os' to avoid a collision with the
 builtin.
 """
+from __future__ import print_function
 #-----------------------------------------------------------------------------
 #  Copyright (c) 2012 The IPython Development Team.
 #
@@ -26,16 +27,19 @@ from pprint import pformat
 from IPython.core import magic_arguments
 from IPython.core import oinspect
 from IPython.core import page
-from IPython.core.error import UsageError, StdinNotImplementedError
+from IPython.core.alias import AliasError, Alias
+from IPython.core.error import UsageError
 from IPython.core.magic import  (
     Magics, compress_dhist, magics_class, line_magic, cell_magic, line_cell_magic
 )
 from IPython.testing.skipdoctest import skip_doctest
-from IPython.utils.io import file_read, nlprint
 from IPython.utils.openpy import source_to_unicode
-from IPython.utils.path import get_py_filename, unquote_filename
+from IPython.utils.path import unquote_filename
 from IPython.utils.process import abbrev_cwd
+from IPython.utils import py3compat
+from IPython.utils.py3compat import unicode_type
 from IPython.utils.terminal import set_term_title
+
 #-----------------------------------------------------------------------------
 # Magic implementation classes
 #-----------------------------------------------------------------------------
@@ -106,17 +110,21 @@ class OSMagics(Magics):
             # for k, v in stored:
             #     atab.append(k, v[0])
 
-            print "Total number of aliases:", len(aliases)
+            print("Total number of aliases:", len(aliases))
             sys.stdout.flush()
             return aliases
 
         # Now try to define a new one
         try:
             alias,cmd = par.split(None, 1)
-        except:
-            print oinspect.getdoc(self.alias)
-        else:
-            self.shell.alias_manager.soft_define_alias(alias, cmd)
+        except TypeError:
+            print(oinspect.getdoc(self.alias))
+            return
+        
+        try:
+            self.shell.alias_manager.define_alias(alias, cmd)
+        except AliasError as e:
+            print(e)
     # end magic_alias
 
     @line_magic
@@ -124,10 +132,15 @@ class OSMagics(Magics):
         """Remove an alias"""
 
         aname = parameter_s.strip()
-        self.shell.alias_manager.undefine_alias(aname)
+        try:
+            self.shell.alias_manager.undefine_alias(aname)
+        except ValueError as e:
+            print(e)
+            return
+        
         stored = self.shell.db.get('stored_aliases', {} )
         if aname in stored:
-            print "Removing %stored alias",aname
+            print("Removing %stored alias",aname)
             del stored[aname]
             self.shell.db['stored_aliases'] = stored
 
@@ -148,7 +161,7 @@ class OSMagics(Magics):
         from IPython.core.alias import InvalidAliasError
 
         # for the benefit of module completer in ipy_completers.py
-        del self.shell.db['rootmodules']
+        del self.shell.db['rootmodules_cache']
 
         path = [os.path.abspath(os.path.expanduser(p)) for p in
             os.environ.get('PATH','').split(os.pathsep)]
@@ -168,7 +181,7 @@ class OSMagics(Magics):
                 winext += '|py'
             execre = re.compile(r'(.*)\.(%s)$' % winext,re.IGNORECASE)
             isexec = lambda fname:os.path.isfile(fname) and execre.match(fname)
-        savedir = os.getcwdu()
+        savedir = py3compat.getcwd()
 
         # Now walk the paths looking for executables to alias.
         try:
@@ -182,14 +195,15 @@ class OSMagics(Magics):
                             try:
                                 # Removes dots from the name since ipython
                                 # will assume names with dots to be python.
-                                self.shell.alias_manager.define_alias(
-                                    ff.replace('.',''), ff)
+                                if not self.shell.alias_manager.is_alias(ff):
+                                    self.shell.alias_manager.define_alias(
+                                        ff.replace('.',''), ff)
                             except InvalidAliasError:
                                 pass
                             else:
                                 syscmdlist.append(ff)
             else:
-                no_alias = self.shell.alias_manager.no_alias
+                no_alias = Alias.blacklist
                 for pdir in path:
                     os.chdir(pdir)
                     for ff in os.listdir(pdir):
@@ -221,7 +235,7 @@ class OSMagics(Magics):
           In [9]: pwd
           Out[9]: '/home/tsuser/sprint/ipython'
         """
-        return os.getcwdu()
+        return py3compat.getcwd()
 
     @skip_doctest
     @line_magic
@@ -265,7 +279,7 @@ class OSMagics(Magics):
           /home/tsuser/parent/child
         """
 
-        oldcwd = os.getcwdu()
+        oldcwd = py3compat.getcwd()
         numcd = re.match(r'(-)(\d+)$',parameter_s)
         # jump in directory history by number
         if numcd:
@@ -273,7 +287,7 @@ class OSMagics(Magics):
             try:
                 ps = self.shell.user_ns['_dh'][nn]
             except IndexError:
-                print 'The requested directory does not exist in history.'
+                print('The requested directory does not exist in history.')
                 return
             else:
                 opts = {}
@@ -296,7 +310,7 @@ class OSMagics(Magics):
                 ps = fallback
 
             if ps is None:
-                print "No matching entry in directory history"
+                print("No matching entry in directory history")
                 return
             else:
                 opts = {}
@@ -320,7 +334,7 @@ class OSMagics(Magics):
 
                 if ps in bkms:
                     target = bkms[ps]
-                    print '(bookmark:%s) -> %s' % (ps, target)
+                    print('(bookmark:%s) -> %s' % (ps, target))
                     ps = target
                 else:
                     if 'b' in opts:
@@ -336,9 +350,9 @@ class OSMagics(Magics):
                 if hasattr(self.shell, 'term_title') and self.shell.term_title:
                     set_term_title('IPython: ' + abbrev_cwd())
             except OSError:
-                print sys.exc_info()[1]
+                print(sys.exc_info()[1])
             else:
-                cwd = os.getcwdu()
+                cwd = py3compat.getcwd()
                 dhist = self.shell.user_ns['_dh']
                 if oldcwd != cwd:
                     dhist.append(cwd)
@@ -348,14 +362,14 @@ class OSMagics(Magics):
             os.chdir(self.shell.home_dir)
             if hasattr(self.shell, 'term_title') and self.shell.term_title:
                 set_term_title('IPython: ' + '~')
-            cwd = os.getcwdu()
+            cwd = py3compat.getcwd()
             dhist = self.shell.user_ns['_dh']
 
             if oldcwd != cwd:
                 dhist.append(cwd)
                 self.shell.db['dhist'] = compress_dhist(dhist)[-100:]
         if not 'q' in opts and self.shell.user_ns['_dh']:
-            print self.shell.user_ns['_dh'][-1]
+            print(self.shell.user_ns['_dh'][-1])
 
 
     @line_magic
@@ -374,7 +388,7 @@ class OSMagics(Magics):
 
         dir_s = self.shell.dir_stack
         tgt = os.path.expanduser(unquote_filename(parameter_s))
-        cwd = os.getcwdu().replace(self.shell.home_dir,'~')
+        cwd = py3compat.getcwd().replace(self.shell.home_dir,'~')
         if tgt:
             self.cd(parameter_s)
         dir_s.insert(0,cwd)
@@ -388,7 +402,7 @@ class OSMagics(Magics):
             raise UsageError("%popd on empty stack")
         top = self.shell.dir_stack.pop(0)
         self.cd(top)
-        print "popd ->",top
+        print("popd ->",top)
 
     @line_magic
     def dirs(self, parameter_s=''):
@@ -402,7 +416,7 @@ class OSMagics(Magics):
 
         %dhist       -> print full history\\
         %dhist n     -> print last n entries only\\
-        %dhist n1 n2 -> print entries between n1 and n2 (n1 not included)\\
+        %dhist n1 n2 -> print entries between n1 and n2 (n2 not included)\\
 
         This history is automatically maintained by the %cd command, and
         always available as the global list variable _dh. You can use %cd -<n>
@@ -424,14 +438,15 @@ class OSMagics(Magics):
                 ini,fin = max(len(dh)-(args[0]),0),len(dh)
             elif len(args) == 2:
                 ini,fin = args
+                fin = min(fin, len(dh))
             else:
                 self.arg_err(self.dhist)
                 return
         else:
             ini,fin = 0,len(dh)
-        nlprint(dh,
-                header = 'Directory history (kept in _dh)',
-                start=ini,stop=fin)
+        print('Directory history (kept in _dh)')
+        for i in range(ini, fin):
+            print("%d: %s" % (i, dh[i]))
 
     @skip_doctest
     @line_magic
@@ -543,7 +558,7 @@ class OSMagics(Magics):
         split = 'l' in opts
         out = self.shell.getoutput(cmd, split=split)
         if 'v' in opts:
-            print '%s ==\n%s' % (var, pformat(out))
+            print('%s ==\n%s' % (var, pformat(out)))
         if var:
             self.shell.user_ns.update({var:out})
         else:
@@ -655,14 +670,14 @@ class OSMagics(Magics):
             else:
                 size = 0
             fmt = '%-'+str(size)+'s -> %s'
-            print 'Current bookmarks:'
+            print('Current bookmarks:')
             for bk in bks:
-                print fmt % (bk, bkms[bk])
+                print(fmt % (bk, bkms[bk]))
         else:
             if not args:
                 raise UsageError("%bookmark: You must specify the bookmark name")
             elif len(args)==1:
-                bkms[args[0]] = os.getcwdu()
+                bkms[args[0]] = py3compat.getcwd()
             elif len(args)==2:
                 bkms[args[0]] = args[1]
         self.shell.db['bookmarks'] = bkms
@@ -689,37 +704,38 @@ class OSMagics(Magics):
         try :
             cont = self.shell.find_user_code(parameter_s, skip_encoding_cookie=False)
         except (ValueError, IOError):
-            print "Error: no such file, variable, URL, history range or macro"
+            print("Error: no such file, variable, URL, history range or macro")
             return
 
         page.page(self.shell.pycolorize(source_to_unicode(cont)))
 
     @magic_arguments.magic_arguments()
     @magic_arguments.argument(
-        '-a', '--amend', action='store_true', default=False,
-        help='Open file for amending if it exists'
+        '-a', '--append', action='store_true', default=False,
+        help='Append contents of the cell to an existing file. '
+             'The file will be created if it does not exist.'
     )
     @magic_arguments.argument(
-        'filename', type=unicode,
+        'filename', type=unicode_type,
         help='file to write'
     )
     @cell_magic
-    def file(self, line, cell):
+    def writefile(self, line, cell):
         """Write the contents of the cell to a file.
         
-        For frontends that do not support stdin (Notebook), -f is implied.
+        The file will be overwritten unless the -a (--append) flag is specified.
         """
-        args = magic_arguments.parse_argstring(self.file, line)
-        filename = unquote_filename(args.filename)
+        args = magic_arguments.parse_argstring(self.writefile, line)
+        filename = os.path.expanduser(unquote_filename(args.filename))
         
         if os.path.exists(filename):
-            if args.amend:
-                print "Amending to %s" % filename
+            if args.append:
+                print("Appending to %s" % filename)
             else:
-                print "Overwriting %s" % filename
+                print("Overwriting %s" % filename)
         else:
-            print "Writing %s" % filename
+            print("Writing %s" % filename)
         
-        mode = 'a' if args.amend else 'w'
+        mode = 'a' if args.append else 'w'
         with io.open(filename, mode, encoding='utf-8') as f:
             f.write(cell)

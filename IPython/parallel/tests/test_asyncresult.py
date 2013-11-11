@@ -26,6 +26,7 @@ from IPython.parallel.error import TimeoutError
 from IPython.parallel import error, Client
 from IPython.parallel.tests import add_engines
 from .clienttest import ClusterTestCase
+from IPython.utils.py3compat import iteritems
 
 def setup():
     add_engines(2, total=True)
@@ -34,6 +35,9 @@ def wait(n):
     import time
     time.sleep(n)
     return n
+
+def echo(x):
+    return x
 
 class AsyncResultTest(ClusterTestCase):
 
@@ -74,8 +78,22 @@ class AsyncResultTest(ClusterTestCase):
         self.assertEqual(ar.get(), [5]*n)
         d = ar.get_dict()
         self.assertEqual(sorted(d.keys()), sorted(self.client.ids))
-        for eid,r in d.iteritems():
+        for eid,r in iteritems(d):
             self.assertEqual(r, 5)
+    
+    def test_get_dict_single(self):
+        view = self.client[-1]
+        for v in (list(range(5)), 5, ('abc', 'def'), 'string'):
+            ar = view.apply_async(echo, v)
+            self.assertEqual(ar.get(), v)
+            d = ar.get_dict()
+            self.assertEqual(d, {view.targets : v})
+    
+    def test_get_dict_bad(self):
+        ar = self.client[:].apply_async(lambda : 5)
+        ar2 = self.client[:].apply_async(lambda : 5)
+        ar = self.client.get_result(ar.msg_ids + ar2.msg_ids)
+        self.assertRaises(ValueError, ar.get_dict)
     
     def test_list_amr(self):
         ar = self.client.load_balanced_view().map_async(wait, [0.1]*5)
@@ -128,11 +146,11 @@ class AsyncResultTest(ClusterTestCase):
     
     def test_len(self):
         v = self.client.load_balanced_view()
-        ar = v.map_async(lambda x: x, range(10))
+        ar = v.map_async(lambda x: x, list(range(10)))
         self.assertEqual(len(ar), 10)
-        ar = v.apply_async(lambda x: x, range(10))
+        ar = v.apply_async(lambda x: x, list(range(10)))
         self.assertEqual(len(ar), 1)
-        ar = self.client[:].apply_async(lambda x: x, range(10))
+        ar = self.client[:].apply_async(lambda x: x, list(range(10)))
         self.assertEqual(len(ar), len(self.client.ids))
     
     def test_wall_time_single(self):
@@ -273,7 +291,7 @@ class AsyncResultTest(ClusterTestCase):
         v = self.client[-1]
         ar = v.execute('\n'.join([
             "import time",
-            "from IPython.zmq.datapub import publish_data",
+            "from IPython.kernel.zmq.datapub import publish_data",
             "for i in range(5):",
             "    publish_data(dict(i=i))",
             "    time.sleep(0.1)",
@@ -283,12 +301,27 @@ class AsyncResultTest(ClusterTestCase):
         # timeout after 10s
         while time.time() <= tic + 10:
             if ar.data:
-                found.add(ar.data['i'])
-                if ar.data['i'] == 4:
+                i = ar.data['i']
+                found.add(i)
+                if i == 4:
                     break
             time.sleep(0.05)
         
         ar.get(5)
         nt.assert_in(4, found)
         self.assertTrue(len(found) > 1, "should have seen data multiple times, but got: %s" % found)
+    
+    def test_not_single_result(self):
+        save_build = self.client._build_targets
+        def single_engine(*a, **kw):
+            idents, targets = save_build(*a, **kw)
+            return idents[:1], targets[:1]
+        ids = single_engine('all')[1]
+        self.client._build_targets = single_engine
+        for targets in ('all', None, ids):
+            dv = self.client.direct_view(targets=targets)
+            ar = dv.apply_async(lambda : 5)
+            self.assertEqual(ar.get(10), [5])
+        self.client._build_targets = save_build
+
 

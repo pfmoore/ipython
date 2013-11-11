@@ -9,6 +9,7 @@ Authors:
 * MinRK
 
 """
+from __future__ import print_function
 
 #-----------------------------------------------------------------------------
 #  Copyright (C) 2008-2011  The IPython Development Team
@@ -37,6 +38,7 @@ from IPython.core.application import BaseIPythonApplication
 from IPython.core.profiledir import ProfileDir
 from IPython.utils.daemonize import daemonize
 from IPython.utils.importstring import import_item
+from IPython.utils.py3compat import string_types
 from IPython.utils.sysinfo import num_cpus
 from IPython.utils.traitlets import (Integer, Unicode, Bool, CFloat, Dict, List, Any,
                                         DottedObjectName)
@@ -53,14 +55,11 @@ from IPython.parallel.apps.baseapp import (
 #-----------------------------------------------------------------------------
 
 
-default_config_file_name = u'ipcluster_config.py'
-
-
 _description = """Start an IPython cluster for parallel computing.
 
 An IPython cluster consists of 1 controller and 1 or more engines.
-This command automates the startup of these processes using a wide
-range of startup methods (SSH, local processes, PBS, mpiexec,
+This command automates the startup of these processes using a wide range of
+startup methods (SSH, local processes, PBS, mpiexec, SGE, LSF, HTCondor,
 Windows HPC Server 2008). To start a cluster with 4 engines on your
 local host simply do 'ipcluster start --n=4'. For more complex usage
 you will typically do 'ipython profile create mycluster --parallel', then edit
@@ -116,7 +115,7 @@ def find_launcher_class(clsname, kind):
     ==========
     clsname : str
         The full name of the launcher class, either with or without the
-        module path, or an abbreviation (MPI, SSH, SGE, PBS, LSF,
+        module path, or an abbreviation (MPI, SSH, SGE, PBS, LSF, HTCondor
         WindowsHPC).
     kind : str
         Either 'EngineSet' or 'Controller'.
@@ -125,7 +124,7 @@ def find_launcher_class(clsname, kind):
         # not a module, presume it's the raw name in apps.launcher
         if kind and kind not in clsname:
             # doesn't match necessary full class name, assume it's
-            # just 'PBS' or 'MPI' prefix:
+            # just 'PBS' or 'MPI' etc prefix:
             clsname = clsname + kind + 'Launcher'
         clsname = 'IPython.parallel.apps.launcher.'+clsname
     klass = import_item(clsname)
@@ -176,7 +175,6 @@ class IPClusterStop(BaseParallelApplication):
     name = u'ipcluster'
     description = stop_help
     examples = _stop_examples
-    config_file_name = Unicode(default_config_file_name)
 
     signal = Integer(signal.SIGINT, config=True,
         help="signal to use for stopping processes.")
@@ -247,7 +245,6 @@ class IPClusterEngines(BaseParallelApplication):
     description = engines_help
     examples = _engines_examples
     usage = None
-    config_file_name = Unicode(default_config_file_name)
     default_log_level = logging.INFO
     classes = List()
     def _classes_default(self):
@@ -262,7 +259,7 @@ class IPClusterEngines(BaseParallelApplication):
 
     engine_launcher = Any(config=True, help="Deprecated, use engine_launcher_class")
     def _engine_launcher_changed(self, name, old, new):
-        if isinstance(new, basestring):
+        if isinstance(new, string_types):
             self.log.warn("WARNING: %s.engine_launcher is deprecated as of 0.12,"
                     " use engine_launcher_class" % self.__class__.__name__)
             self.engine_launcher_class = new
@@ -287,6 +284,7 @@ class IPClusterEngines(BaseParallelApplication):
                         Note that SSH does *not* move the connection files
                         around, so you will likely have to do this manually
                         unless the machines are on a shared file system.
+            HTCondor : use HTCondor to submit engines to a batch queue
             WindowsHPC : use Windows HPC
 
         If you are using one of IPython's builtin launchers, you can specify just the
@@ -337,7 +335,7 @@ class IPClusterEngines(BaseParallelApplication):
             self.exit(1)
 
         launcher = klass(
-            work_dir=u'.', config=self.config, log=self.log,
+            work_dir=u'.', parent=self, log=self.log,
             profile_dir=self.profile_dir.location, cluster_id=self.cluster_id,
         )
         return launcher
@@ -465,7 +463,7 @@ class IPClusterStart(IPClusterEngines):
 
     controller_launcher = Any(config=True, help="Deprecated, use controller_launcher_class")
     def _controller_launcher_changed(self, name, old, new):
-        if isinstance(new, basestring):
+        if isinstance(new, string_types):
             # old 0.11-style config
             self.log.warn("WARNING: %s.controller_launcher is deprecated as of 0.12,"
                     " use controller_launcher_class" % self.__class__.__name__)
@@ -488,6 +486,7 @@ class IPClusterStart(IPClusterEngines):
             PBS : use PBS (qsub) to submit the controller to a batch queue
             SGE : use SGE (qsub) to submit the controller to a batch queue
             LSF : use LSF (bsub) to submit the controller to a batch queue
+            HTCondor : use HTCondor to submit the controller to a batch queue
             SSH : use SSH to start the controller
             WindowsHPC : use Windows HPC
 
@@ -581,7 +580,7 @@ class IPClusterStart(IPClusterEngines):
 
 base='IPython.parallel.apps.ipclusterapp.IPCluster'
 
-class IPClusterApp(Application):
+class IPClusterApp(BaseIPythonApplication):
     name = u'ipcluster'
     description = _description
     examples = _main_examples
@@ -598,20 +597,15 @@ class IPClusterApp(Application):
 
     def start(self):
         if self.subapp is None:
-            print "No subcommand specified. Must specify one of: %s"%(self.subcommands.keys())
-            print
+            print("No subcommand specified. Must specify one of: %s"%(self.subcommands.keys()))
+            print()
             self.print_description()
             self.print_subcommands()
             self.exit(1)
         else:
             return self.subapp.start()
 
-def launch_new_instance():
-    """Create and run the IPython cluster."""
-    app = IPClusterApp.instance()
-    app.initialize()
-    app.start()
-
+launch_new_instance = IPClusterApp.launch_instance
 
 if __name__ == '__main__':
     launch_new_instance()

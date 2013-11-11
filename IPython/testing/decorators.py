@@ -16,10 +16,6 @@ Included decorators:
 
 Lightweight testing that remains unittest-compatible.
 
-- @parametric, for parametric test support that is vastly easier to use than
-  nose's for debugging. With ours, if a test fails, the stack under inspection
-  is that of the test and not that of the test framework.
-
 - An @as_unittest decorator can be used to tag any normal parameter-less
   function as a unittest TestCase.  Then, both nose and normal unittest will
   recognize it as such.  This will make it easier to migrate away from Nose if
@@ -48,8 +44,8 @@ Authors
 #-----------------------------------------------------------------------------
 
 # Stdlib imports
-import inspect
 import sys
+import os
 import tempfile
 import unittest
 
@@ -58,14 +54,8 @@ import unittest
 # This is Michele Simionato's decorator module, kept verbatim.
 from IPython.external.decorator import decorator
 
-# We already have python3-compliant code for parametric tests
-if sys.version[0]=='2':
-    from _paramtestpy2 import parametric, ParametricTestCase
-else:
-    from _paramtestpy3 import parametric, ParametricTestCase
-
 # Expose the unittest-driven decorators
-from ipunittest import ipdoctest, ipdocstring
+from .ipunittest import ipdoctest, ipdocstring
 
 # Grab the numpy-specific decorators which we keep in a file that we
 # occasionally update from upstream: decorators.py is a copy of
@@ -74,6 +64,7 @@ from IPython.external.decorators import *
 
 # For onlyif_cmd_exists decorator
 from IPython.utils.process import is_cmd_found
+from IPython.utils.py3compat import string_types
 
 #-----------------------------------------------------------------------------
 # Classes and functions
@@ -128,15 +119,17 @@ def make_label_dec(label,ds=None):
     --------
 
     A simple labeling decorator:
-    >>> slow = make_label_dec('slow')
-    >>> print slow.__doc__
-    Labels a test as 'slow'.
 
+    >>> slow = make_label_dec('slow')
+    >>> slow.__doc__
+    "Labels a test as 'slow'."
+    
     And one that uses multiple labels and a custom docstring:
+    
     >>> rare = make_label_dec(['slow','hard'],
     ... "Mix labels 'slow' and 'hard' for rare tests.")
-    >>> print rare.__doc__
-    Mix labels 'slow' and 'hard' for rare tests.
+    >>> rare.__doc__
+    "Mix labels 'slow' and 'hard' for rare tests."
 
     Now, let's test using this one:
     >>> @rare
@@ -149,7 +142,7 @@ def make_label_dec(label,ds=None):
     True
     """
 
-    if isinstance(label,basestring):
+    if isinstance(label, string_types):
         labels = [label]
     else:
         labels = label
@@ -183,10 +176,10 @@ def skipif(skip_condition, msg=None):
     Parameters
     ----------
     skip_condition : bool or callable.
-    Flag to determine whether to skip test.  If the condition is a
-    callable, it is used at runtime to dynamically make the decision.  This
-    is useful for tests that may require costly imports, to delay the cost
-    until the test suite is actually executed.
+        Flag to determine whether to skip test.  If the condition is a
+        callable, it is used at runtime to dynamically make the decision.  This
+        is useful for tests that may require costly imports, to delay the cost
+        until the test suite is actually executed.
     msg : string
         Message to give on raising a SkipTest exception
 
@@ -294,6 +287,19 @@ def module_not_available(module):
 
     return mod_not_avail
 
+
+def decorated_dummy(dec, name):
+    """Return a dummy function decorated with dec, with the given name.
+    
+    Examples
+    --------
+    import IPython.testing.decorators as dec
+    setup = dec.decorated_dummy(dec.skip_if_no_x11, __name__)
+    """
+    dummy = lambda: None
+    dummy.__name__ = name
+    return dec(dummy)
+
 #-----------------------------------------------------------------------------
 # Decorators for public use
 
@@ -312,6 +318,17 @@ skip_if_not_linux = skipif(not sys.platform.startswith('linux'),
                            "This test only runs under Linux")
 skip_if_not_osx = skipif(sys.platform != 'darwin',
                          "This test only runs under OSX")
+
+
+_x11_skip_cond = (sys.platform not in ('darwin', 'win32') and
+                  os.environ.get('DISPLAY', '') == '')
+_x11_skip_msg = "Skipped under *nix when X11/XOrg not available"
+
+skip_if_no_x11 = skipif(_x11_skip_cond, _x11_skip_msg)
+
+# not a decorator itself, returns a dummy function to be used as setup
+def skip_file_no_x11(name):
+    return decorated_dummy(skip_if_no_x11, name) if _x11_skip_cond else None
 
 # Other skip decorators
 
@@ -352,7 +369,14 @@ def onlyif_cmds_exist(*commands):
     Decorator to skip test when at least one of `commands` is not found.
     """
     for cmd in commands:
-        if not is_cmd_found(cmd):
-            return skip("This test runs only if command '{0}' "
-                        "is installed".format(cmd))
+        try:
+            if not is_cmd_found(cmd):
+                return skip("This test runs only if command '{0}' "
+                            "is installed".format(cmd))
+        except ImportError as e:
+            # is_cmd_found uses pywin32 on windows, which might not be available
+            if sys.platform == 'win32' and 'pywin32' in str(e):
+                return skip("This test runs only if pywin32 and command '{0}' "
+                            "is installed".format(cmd))
+            raise e
     return null_deco

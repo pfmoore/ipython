@@ -20,21 +20,29 @@ Authors
 # Imports
 #-----------------------------------------------------------------------------
 # stdlib
+import ast
 import os
+import signal
 import shutil
 import sys
 import tempfile
 import unittest
 from os.path import join
-from StringIO import StringIO
 
 # third-party
 import nose.tools as nt
 
 # Our own
-from IPython.testing.decorators import skipif
+from IPython.testing.decorators import skipif, skip_win32, onlyif_unicode_paths
 from IPython.testing import tools as tt
 from IPython.utils import io
+from IPython.utils import py3compat
+from IPython.utils.py3compat import unicode_type, PY3
+
+if PY3:
+    from io import StringIO
+else:
+    from StringIO import StringIO
 
 #-----------------------------------------------------------------------------
 # Globals
@@ -105,17 +113,6 @@ class InteractiveShellTestCase(unittest.TestCase):
         ip.run_cell('a = """\n%exit\n"""')
         self.assertEqual(ip.user_ns['a'], '\n%exit\n')
     
-    def test_alias_crash(self):
-        """Errors in prefilter can't crash IPython"""
-        ip.run_cell('%alias parts echo first %s second %s')
-        # capture stderr:
-        save_err = io.stderr
-        io.stderr = StringIO()
-        ip.run_cell('parts 1')
-        err = io.stderr.getvalue()
-        io.stderr = save_err
-        self.assertEqual(err.split(':')[0], 'ERROR')
-    
     def test_trailing_newline(self):
         """test that running !(command) does not raise a SyntaxError"""
         ip.run_cell('!(true)\n', False)
@@ -149,7 +146,7 @@ class InteractiveShellTestCase(unittest.TestCase):
             assert isinstance(ip.user_ns['byte_str'], str) # string literals are byte strings by default
             ip.run_cell('from __future__ import unicode_literals')
             ip.run_cell(u'unicode_str = "a"')
-            assert isinstance(ip.user_ns['unicode_str'], unicode) # strings literals are now unicode
+            assert isinstance(ip.user_ns['unicode_str'], unicode_type) # strings literals are now unicode
         finally:
             # Reset compiler flags so we don't mess up other tests.
             ip.compile.reset_compiler_flags()
@@ -163,7 +160,7 @@ class InteractiveShellTestCase(unittest.TestCase):
                      "        list.__init__(self,x)"))
         ip.run_cell("w=Mylist([1,2,3])")
         
-        from cPickle import dumps
+        from pickle import dumps
         
         # We need to swap in our main module - this is only necessary
         # inside the test framework, because IPython puts the interactive module
@@ -383,17 +380,34 @@ class InteractiveShellTestCase(unittest.TestCase):
         finally:
             # Reset the custom exception hook
             ip.set_custom_exc((), None)
+    
+    @skipif(sys.version_info[0] >= 3, "no differences with __future__ in py3")
+    def test_future_environment(self):
+        "Can we run code with & without the shell's __future__ imports?"
+        ip.run_cell("from __future__ import division")
+        ip.run_cell("a = 1/2", shell_futures=True)
+        self.assertEqual(ip.user_ns['a'], 0.5)
+        ip.run_cell("b = 1/2", shell_futures=False)
+        self.assertEqual(ip.user_ns['b'], 0)
+        
+        ip.compile.reset_compiler_flags()
+        # This shouldn't leak to the shell's compiler
+        ip.run_cell("from __future__ import division \nc=1/2", shell_futures=False)
+        self.assertEqual(ip.user_ns['c'], 0.5)
+        ip.run_cell("d = 1/2", shell_futures=True)
+        self.assertEqual(ip.user_ns['d'], 0)
 
 
 class TestSafeExecfileNonAsciiPath(unittest.TestCase):
 
+    @onlyif_unicode_paths
     def setUp(self):
         self.BASETESTDIR = tempfile.mkdtemp()
         self.TESTDIR = join(self.BASETESTDIR, u"åäö")
         os.mkdir(self.TESTDIR)
         with open(join(self.TESTDIR, u"åäötestscript.py"), "w") as sfile:
             sfile.write("pass\n")
-        self.oldpath = os.getcwdu()
+        self.oldpath = py3compat.getcwd()
         os.chdir(self.TESTDIR)
         self.fname = u"åäötestscript.py"
 
@@ -401,18 +415,54 @@ class TestSafeExecfileNonAsciiPath(unittest.TestCase):
         os.chdir(self.oldpath)
         shutil.rmtree(self.BASETESTDIR)
 
+    @onlyif_unicode_paths
     def test_1(self):
         """Test safe_execfile with non-ascii path
         """
         ip.safe_execfile(self.fname, {}, raise_exceptions=True)
 
+class ExitCodeChecks(tt.TempFileMixin):
+    def test_exit_code_ok(self):
+        self.system('exit 0')
+        self.assertEqual(ip.user_ns['_exit_code'], 0)
 
-class TestSystemRaw(unittest.TestCase):
+    def test_exit_code_error(self):
+        self.system('exit 1')
+        self.assertEqual(ip.user_ns['_exit_code'], 1)
+
+    @skipif(not hasattr(signal, 'SIGALRM'))
+    def test_exit_code_signal(self):
+        self.mktmp("import signal, time\n"
+                   "signal.setitimer(signal.ITIMER_REAL, 0.1)\n"
+                   "time.sleep(1)\n")
+        self.system("%s %s" % (sys.executable, self.fname))
+        self.assertEqual(ip.user_ns['_exit_code'], -signal.SIGALRM)
+
+class TestSystemRaw(unittest.TestCase, ExitCodeChecks):
+    system = ip.system_raw
+
+    @onlyif_unicode_paths
     def test_1(self):
         """Test system_raw with non-ascii cmd
         """
-        cmd = ur'''python -c "'åäö'"   '''
+        cmd = u'''python -c "'åäö'"   '''
         ip.system_raw(cmd)
+
+# TODO: Exit codes are currently ignored on Windows.
+class TestSystemPipedExitCode(unittest.TestCase, ExitCodeChecks):
+    system = ip.system_piped
+
+    @skip_win32
+    def test_exit_code_ok(self):
+        ExitCodeChecks.test_exit_code_ok(self)
+
+    @skip_win32
+    def test_exit_code_error(self):
+        ExitCodeChecks.test_exit_code_error(self)
+
+    @skip_win32
+    def test_exit_code_signal(self):
+        ExitCodeChecks.test_exit_code_signal(self)
 
 class TestModules(unittest.TestCase, tt.TempFileMixin):
     def test_extraneous_loads(self):
@@ -421,12 +471,207 @@ class TestModules(unittest.TestCase, tt.TempFileMixin):
         self.mktmp("import sys\n"
                    "print('numpy' in sys.modules)\n"
                    "print('IPython.parallel' in sys.modules)\n"
-                   "print('IPython.zmq' in sys.modules)\n"
+                   "print('IPython.kernel.zmq' in sys.modules)\n"
                    )
         out = "False\nFalse\nFalse\n"
         tt.ipexec_validate(self.fname, out)
 
+class Negator(ast.NodeTransformer):
+    """Negates all number literals in an AST."""
+    def visit_Num(self, node):
+        node.n = -node.n
+        return node
+
+class TestAstTransform(unittest.TestCase):
+    def setUp(self):
+        self.negator = Negator()
+        ip.ast_transformers.append(self.negator)
+    
+    def tearDown(self):
+        ip.ast_transformers.remove(self.negator)
+    
+    def test_run_cell(self):
+        with tt.AssertPrints('-34'):
+            ip.run_cell('print (12 + 22)')
+        
+        # A named reference to a number shouldn't be transformed.
+        ip.user_ns['n'] = 55
+        with tt.AssertNotPrints('-55'):
+            ip.run_cell('print (n)')
+    
+    def test_timeit(self):
+        called = set()
+        def f(x):
+            called.add(x)
+        ip.push({'f':f})
+        
+        with tt.AssertPrints("best of "):
+            ip.run_line_magic("timeit", "-n1 f(1)")
+        self.assertEqual(called, set([-1]))
+        called.clear()
+        
+        with tt.AssertPrints("best of "):
+            ip.run_cell_magic("timeit", "-n1 f(2)", "f(3)")
+        self.assertEqual(called, set([-2, -3]))
+    
+    def test_time(self):
+        called = []
+        def f(x):
+            called.append(x)
+        ip.push({'f':f})
+        
+        # Test with an expression
+        with tt.AssertPrints("Wall time: "):
+            ip.run_line_magic("time", "f(5+9)")
+        self.assertEqual(called, [-14])
+        called[:] = []
+        
+        # Test with a statement (different code path)
+        with tt.AssertPrints("Wall time: "):
+            ip.run_line_magic("time", "a = f(-3 + -2)")
+        self.assertEqual(called, [5])
+    
+    def test_macro(self):
+        ip.push({'a':10})
+        # The AST transformation makes this do a+=-1
+        ip.define_macro("amacro", "a+=1\nprint(a)")
+        
+        with tt.AssertPrints("9"):
+            ip.run_cell("amacro")
+        with tt.AssertPrints("8"):
+            ip.run_cell("amacro")
+
+class IntegerWrapper(ast.NodeTransformer):
+    """Wraps all integers in a call to Integer()"""
+    def visit_Num(self, node):
+        if isinstance(node.n, int):
+            return ast.Call(func=ast.Name(id='Integer', ctx=ast.Load()),
+                            args=[node], keywords=[])
+        return node
+
+class TestAstTransform2(unittest.TestCase):
+    def setUp(self):
+        self.intwrapper = IntegerWrapper()
+        ip.ast_transformers.append(self.intwrapper)
+        
+        self.calls = []
+        def Integer(*args):
+            self.calls.append(args)
+            return args
+        ip.push({"Integer": Integer})
+    
+    def tearDown(self):
+        ip.ast_transformers.remove(self.intwrapper)
+        del ip.user_ns['Integer']
+    
+    def test_run_cell(self):
+        ip.run_cell("n = 2")
+        self.assertEqual(self.calls, [(2,)])
+        
+        # This shouldn't throw an error
+        ip.run_cell("o = 2.0")
+        self.assertEqual(ip.user_ns['o'], 2.0)
+    
+    def test_timeit(self):
+        called = set()
+        def f(x):
+            called.add(x)
+        ip.push({'f':f})
+        
+        with tt.AssertPrints("best of "):
+            ip.run_line_magic("timeit", "-n1 f(1)")
+        self.assertEqual(called, set([(1,)]))
+        called.clear()
+        
+        with tt.AssertPrints("best of "):
+            ip.run_cell_magic("timeit", "-n1 f(2)", "f(3)")
+        self.assertEqual(called, set([(2,), (3,)]))
+
+class ErrorTransformer(ast.NodeTransformer):
+    """Throws an error when it sees a number."""
+    def visit_Num(self):
+        raise ValueError("test")
+
+class TestAstTransformError(unittest.TestCase):
+    def test_unregistering(self):
+        err_transformer = ErrorTransformer()
+        ip.ast_transformers.append(err_transformer)
+        
+        with tt.AssertPrints("unregister", channel='stderr'):
+            ip.run_cell("1 + 2")
+        
+        # This should have been removed.
+        nt.assert_not_in(err_transformer, ip.ast_transformers)
 
 def test__IPYTHON__():
     # This shouldn't raise a NameError, that's all
     __IPYTHON__
+
+
+class DummyRepr(object):
+    def __repr__(self):
+        return "DummyRepr"
+    
+    def _repr_html_(self):
+        return "<b>dummy</b>"
+    
+    def _repr_javascript_(self):
+        return "console.log('hi');", {'key': 'value'}
+    
+
+def test_user_variables():
+    # enable all formatters
+    ip.display_formatter.active_types = ip.display_formatter.format_types
+    
+    ip.user_ns['dummy'] = d = DummyRepr()
+    keys = set(['dummy', 'doesnotexist'])
+    r = ip.user_variables(keys)
+
+    nt.assert_equal(keys, set(r.keys()))
+    dummy = r['dummy']
+    nt.assert_equal(set(['status', 'data', 'metadata']), set(dummy.keys()))
+    nt.assert_equal(dummy['status'], 'ok')
+    data = dummy['data']
+    metadata = dummy['metadata']
+    nt.assert_equal(data.get('text/html'), d._repr_html_())
+    js, jsmd = d._repr_javascript_()
+    nt.assert_equal(data.get('application/javascript'), js)
+    nt.assert_equal(metadata.get('application/javascript'), jsmd)
+    
+    dne = r['doesnotexist']
+    nt.assert_equal(dne['status'], 'error')
+    nt.assert_equal(dne['ename'], 'KeyError')
+    
+    # back to text only
+    ip.display_formatter.active_types = ['text/plain']
+    
+def test_user_expression():
+    # enable all formatters
+    ip.display_formatter.active_types = ip.display_formatter.format_types
+    query = {
+        'a' : '1 + 2',
+        'b' : '1/0',
+    }
+    r = ip.user_expressions(query)
+    import pprint
+    pprint.pprint(r)
+    nt.assert_equal(r.keys(), query.keys())
+    a = r['a']
+    nt.assert_equal(set(['status', 'data', 'metadata']), set(a.keys()))
+    nt.assert_equal(a['status'], 'ok')
+    data = a['data']
+    metadata = a['metadata']
+    nt.assert_equal(data.get('text/plain'), '3')
+    
+    b = r['b']
+    nt.assert_equal(b['status'], 'error')
+    nt.assert_equal(b['ename'], 'ZeroDivisionError')
+    
+    # back to text only
+    ip.display_formatter.active_types = ['text/plain']
+    
+
+
+
+
+

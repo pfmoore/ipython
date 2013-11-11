@@ -61,8 +61,10 @@ from IPython.utils.text import EvalFormatter
 from IPython.utils.traitlets import (
     Any, Integer, CFloat, List, Unicode, Dict, Instance, HasTraits, CRegExp
 )
+from IPython.utils.encoding import DEFAULT_ENCODING
 from IPython.utils.path import get_home_dir
 from IPython.utils.process import find_cmd, FindCmdError
+from IPython.utils.py3compat import iteritems, itervalues
 
 from .win32support import forward_read_events
 
@@ -85,7 +87,6 @@ ipcontroller_cmd_argv = [sys.executable, "-c", cmd % "ipcontrollerapp"]
 #-----------------------------------------------------------------------------
 # Base launchers and errors
 #-----------------------------------------------------------------------------
-
 
 class LauncherError(Exception):
     pass
@@ -385,7 +386,7 @@ class LocalEngineSetLauncher(LocalEngineLauncher):
         for i in range(n):
             if i > 0:
                 time.sleep(self.delay)
-            el = self.launcher_class(work_dir=self.work_dir, config=self.config, log=self.log,
+            el = self.launcher_class(work_dir=self.work_dir, parent=self, log=self.log,
                                     profile_dir=self.profile_dir, cluster_id=self.cluster_id,
             )
 
@@ -404,14 +405,14 @@ class LocalEngineSetLauncher(LocalEngineLauncher):
 
     def signal(self, sig):
         dlist = []
-        for el in self.launchers.itervalues():
+        for el in itervalues(self.launchers):
             d = el.signal(sig)
             dlist.append(d)
         return dlist
 
     def interrupt_then_kill(self, delay=1.0):
         dlist = []
-        for el in self.launchers.itervalues():
+        for el in itervalues(self.launchers):
             d = el.interrupt_then_kill(delay)
             dlist.append(d)
         return dlist
@@ -421,7 +422,7 @@ class LocalEngineSetLauncher(LocalEngineLauncher):
 
     def _notice_engine_stopped(self, data):
         pid = data['pid']
-        for idx,el in self.launchers.iteritems():
+        for idx,el in iteritems(self.launchers):
             if el.process.pid == pid:
                 break
         self.launchers.pop(idx)
@@ -613,10 +614,10 @@ class SSHLauncher(LocalProcessLauncher):
             # wait up to 10s for remote file to exist
             check = check_output(self.ssh_cmd + self.ssh_args + \
                 [self.location, 'test -e', remote, "&& echo 'yes' || echo 'no'"])
-            check = check.strip()
-            if check == 'no':
+            check = check.decode(DEFAULT_ENCODING, 'replace').strip()
+            if check == u'no':
                 time.sleep(1)
-            elif check == 'yes':
+            elif check == u'yes':
                 break
         check_output(self.scp_cmd + [full_remote, local])
     
@@ -643,25 +644,34 @@ class SSHLauncher(LocalProcessLauncher):
             self.process.stdin.write('~.')
             self.process.stdin.flush()
 
-class SSHClusterLauncher(SSHLauncher):
+class SSHClusterLauncher(SSHLauncher, ClusterAppMixin):
     
     remote_profile_dir = Unicode('', config=True,
         help="""The remote profile_dir to use.  
         
         If not specified, use calling profile, stripping out possible leading homedir.
         """)
-
-    def _remote_profile_dir_default(self):
-        """turns /home/you/.ipython/profile_foo into .ipython/profile_foo
-        """
+    
+    def _profile_dir_changed(self, name, old, new):
+        if not self.remote_profile_dir:
+            # trigger remote_profile_dir_default logic again,
+            # in case it was already triggered before profile_dir was set
+            self.remote_profile_dir = self._strip_home(new)
+    
+    @staticmethod
+    def _strip_home(path):
+        """turns /home/you/.ipython/profile_foo into .ipython/profile_foo"""
         home = get_home_dir()
         if not home.endswith('/'):
             home = home+'/'
         
-        if self.profile_dir.startswith(home):
-            return self.profile_dir[len(home):]
+        if path.startswith(home):
+            return path[len(home):]
         else:
-            return self.profile_dir
+            return path
+
+    def _remote_profile_dir_default(self):
+        return self._strip_home(self.profile_dir)
     
     def _cluster_id_changed(self, name, old, new):
         if new:
@@ -733,7 +743,7 @@ class SSHEngineSetLauncher(LocalEngineSetLauncher):
     def engine_count(self):
         """determine engine count from `engines` dict"""
         count = 0
-        for n in self.engines.itervalues():
+        for n in itervalues(self.engines):
             if isinstance(n, (tuple,list)):
                 n,args = n
             count += n
@@ -745,7 +755,7 @@ class SSHEngineSetLauncher(LocalEngineSetLauncher):
         """
 
         dlist = []
-        for host, n in self.engines.iteritems():
+        for host, n in iteritems(self.engines):
             if isinstance(n, (tuple, list)):
                 n, args = n
             else:
@@ -758,7 +768,7 @@ class SSHEngineSetLauncher(LocalEngineSetLauncher):
             for i in range(n):
                 if i > 0:
                     time.sleep(self.delay)
-                el = self.launcher_class(work_dir=self.work_dir, config=self.config, log=self.log,
+                el = self.launcher_class(work_dir=self.work_dir, parent=self, log=self.log,
                                         profile_dir=self.profile_dir, cluster_id=self.cluster_id,
                 )
                 if i > 0:
@@ -880,6 +890,7 @@ class WindowsHPCLauncher(BaseLauncher):
             cwd=self.work_dir,
             stderr=STDOUT
         )
+        output = output.decode(DEFAULT_ENCODING, 'replace')
         job_id = self.parse_job_id(output)
         self.notify_start(job_id)
         return job_id
@@ -897,8 +908,9 @@ class WindowsHPCLauncher(BaseLauncher):
                 cwd=self.work_dir,
                 stderr=STDOUT
             )
+            output = output.decode(DEFAULT_ENCODING, 'replace')
         except:
-            output = 'The job already appears to be stoppped: %r' % self.job_id
+            output = u'The job already appears to be stopped: %r' % self.job_id
         self.notify_stop(dict(job_id=self.job_id, output=output))  # Pass the output of the kill cmd
         return output
 
@@ -911,9 +923,9 @@ class WindowsHPCControllerLauncher(WindowsHPCLauncher, ClusterAppMixin):
         help="extra args to pass to ipcontroller")
 
     def write_job_file(self, n):
-        job = IPControllerJob(config=self.config)
+        job = IPControllerJob(parent=self)
 
-        t = IPControllerTask(config=self.config)
+        t = IPControllerTask(parent=self)
         # The tasks work directory is *not* the actual work directory of
         # the controller. It is used as the base path for the stdout/stderr
         # files that the scheduler redirects to.
@@ -943,10 +955,10 @@ class WindowsHPCEngineSetLauncher(WindowsHPCLauncher, ClusterAppMixin):
         help="extra args to pas to ipengine")
 
     def write_job_file(self, n):
-        job = IPEngineSetJob(config=self.config)
+        job = IPEngineSetJob(parent=self)
 
         for i in range(n):
-            t = IPEngineTask(config=self.config)
+            t = IPEngineTask(parent=self)
             # The tasks work directory is *not* the actual work directory of
             # the engine. It is used as the base path for the stdout/stderr
             # files that the scheduler redirects to.
@@ -1008,6 +1020,8 @@ class BatchSystemLauncher(BaseLauncher):
     job_id_regexp = CRegExp('', config=True,
         help="""A regular expression used to get the job id from the output of the
         submit_command.""")
+    job_id_regexp_group = Integer(0, config=True,
+        help="""The group we wish to match in job_id_regexp (0 to match all)""")
     batch_template = Unicode('', config=True,
         help="The string that is the batch script template itself.")
     batch_template_file = Unicode(u'', config=True,
@@ -1036,6 +1050,7 @@ class BatchSystemLauncher(BaseLauncher):
     batch_file = Unicode(u'')
     # the format dict used with batch_template:
     context = Dict()
+
     def _context_default(self):
         """load the default context with the default values for the basic keys
 
@@ -1046,7 +1061,6 @@ class BatchSystemLauncher(BaseLauncher):
     
     # the Formatter instance for rendering the templates:
     formatter = Instance(EvalFormatter, (), {})
-
 
     def find_args(self):
         return self.submit_command + [self.batch_file]
@@ -1061,7 +1075,7 @@ class BatchSystemLauncher(BaseLauncher):
         """Take the output of the submit command and return the job id."""
         m = self.job_id_regexp.search(output)
         if m is not None:
-            job_id = m.group()
+            job_id = m.group(self.job_id_regexp_group)
         else:
             raise LauncherError("Job id couldn't be determined: %s" % output)
         self.job_id = job_id
@@ -1079,27 +1093,31 @@ class BatchSystemLauncher(BaseLauncher):
         if not self.batch_template:
             # third (last) priority is default_template
             self.batch_template = self.default_template
-
             # add jobarray or queue lines to user-specified template
             # note that this is *only* when user did not specify a template.
-            # print self.job_array_regexp.search(self.batch_template)
-            if not self.job_array_regexp.search(self.batch_template):
-                self.log.debug("adding job array settings to batch script")
-                firstline, rest = self.batch_template.split('\n',1)
-                self.batch_template = u'\n'.join([firstline, self.job_array_template, rest])
-
-            # print self.queue_regexp.search(self.batch_template)
-            if self.queue and not self.queue_regexp.search(self.batch_template):
-                self.log.debug("adding PBS queue settings to batch script")
-                firstline, rest = self.batch_template.split('\n',1)
-                self.batch_template = u'\n'.join([firstline, self.queue_template, rest])
-
+            self._insert_queue_in_script()
+            self._insert_job_array_in_script()
         script_as_string = self.formatter.format(self.batch_template, **self.context)
         self.log.debug('Writing batch script: %s', self.batch_file)
-
         with open(self.batch_file, 'w') as f:
             f.write(script_as_string)
         os.chmod(self.batch_file, stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
+
+    def _insert_queue_in_script(self):
+        """Inserts a queue if required into the batch script.
+        """
+        if self.queue and not self.queue_regexp.search(self.batch_template):
+            self.log.debug("adding PBS queue settings to batch script")
+            firstline, rest = self.batch_template.split('\n',1)
+            self.batch_template = u'\n'.join([firstline, self.queue_template, rest])
+
+    def _insert_job_array_in_script(self):
+        """Inserts a job array if required into the batch script.
+        """
+        if not self.job_array_regexp.search(self.batch_template):
+            self.log.debug("adding job array settings to batch script")
+            firstline, rest = self.batch_template.split('\n',1)
+            self.batch_template = u'\n'.join([firstline, self.job_array_template, rest])
 
     def start(self, n):
         """Start n copies of the process using a batch system."""
@@ -1108,13 +1126,23 @@ class BatchSystemLauncher(BaseLauncher):
         # can be used in the batch script template as {profile_dir}
         self.write_batch_script(n)
         output = check_output(self.args, env=os.environ)
+        output = output.decode(DEFAULT_ENCODING, 'replace')
 
         job_id = self.parse_job_id(output)
         self.notify_start(job_id)
         return job_id
 
     def stop(self):
-        output = check_output(self.delete_command+[self.job_id], env=os.environ)
+        try:
+            p = Popen(self.delete_command+[self.job_id], env=os.environ,
+                      stdout=PIPE, stderr=PIPE)
+            out, err = p.communicate()
+            output = out + err
+        except:
+            self.log.exception("Problem stopping cluster with command: %s" %
+                               (self.delete_command + [self.job_id]))
+            output = ""
+        output = output.decode(DEFAULT_ENCODING, 'replace')
         self.notify_stop(dict(job_id=self.job_id, output=output)) # Pass the output of the kill cmd
         return output
 
@@ -1147,7 +1175,6 @@ class PBSControllerLauncher(PBSLauncher, BatchClusterAppMixin):
 %s --log-to-file --profile-dir="{profile_dir}" --cluster-id="{cluster_id}"
 """%(' '.join(map(pipes.quote, ipcontroller_cmd_argv))))
 
-
     def start(self):
         """Start the controller by profile or profile_dir."""
         return super(PBSControllerLauncher, self).start(1)
@@ -1163,9 +1190,6 @@ class PBSEngineSetLauncher(PBSLauncher, BatchClusterAppMixin):
 %s --profile-dir="{profile_dir}" --cluster-id="{cluster_id}"
 """%(' '.join(map(pipes.quote,ipengine_cmd_argv))))
 
-    def start(self, n):
-        """Start n engines by profile or profile_dir."""
-        return super(PBSEngineSetLauncher, self).start(n)
 
 #SGE is very similar to PBS
 
@@ -1175,6 +1199,7 @@ class SGELauncher(PBSLauncher):
     job_array_template = Unicode('#$ -t 1-{n}')
     queue_regexp = CRegExp('#\$\W+-q\W+\$?\w+')
     queue_template = Unicode('#$ -q {queue}')
+
 
 class SGEControllerLauncher(SGELauncher, BatchClusterAppMixin):
     """Launch a controller using SGE."""
@@ -1191,6 +1216,7 @@ class SGEControllerLauncher(SGELauncher, BatchClusterAppMixin):
         """Start the controller by profile or profile_dir."""
         return super(SGEControllerLauncher, self).start(1)
 
+
 class SGEEngineSetLauncher(SGELauncher, BatchClusterAppMixin):
     """Launch Engines with SGE"""
     batch_file_name = Unicode(u'sge_engines', config=True,
@@ -1200,10 +1226,6 @@ class SGEEngineSetLauncher(SGELauncher, BatchClusterAppMixin):
 #$ -N ipengine
 %s --profile-dir="{profile_dir}" --cluster-id="{cluster_id}"
 """%(' '.join(map(pipes.quote, ipengine_cmd_argv))))
-
-    def start(self, n):
-        """Start n engines by profile or profile_dir."""
-        return super(SGEEngineSetLauncher, self).start(n)
 
 
 # LSF launchers
@@ -1233,11 +1255,11 @@ class LSFLauncher(BatchSystemLauncher):
         # Here we save profile_dir in the context so they
         # can be used in the batch script template as {profile_dir}
         self.write_batch_script(n)
-        #output = check_output(self.args, env=os.environ)
         piped_cmd = self.args[0]+'<\"'+self.args[1]+'\"'
         self.log.debug("Starting %s: %s", self.__class__.__name__, piped_cmd)
         p = Popen(piped_cmd, shell=True,env=os.environ,stdout=PIPE)
         output,err = p.communicate()
+        output = output.decode(DEFAULT_ENCODING, 'replace')
         job_id = self.parse_job_id(output)
         self.notify_start(job_id)
         return job_id
@@ -1270,9 +1292,87 @@ class LSFEngineSetLauncher(LSFLauncher, BatchClusterAppMixin):
     %s --profile-dir="{profile_dir}" --cluster-id="{cluster_id}"
     """%(' '.join(map(pipes.quote, ipengine_cmd_argv))))
 
-    def start(self, n):
-        """Start n engines by profile or profile_dir."""
-        return super(LSFEngineSetLauncher, self).start(n)
+
+
+class HTCondorLauncher(BatchSystemLauncher):
+    """A BatchSystemLauncher subclass for HTCondor.
+
+    HTCondor requires that we launch the ipengine/ipcontroller scripts rather
+    that the python instance but otherwise is very similar to PBS.  This is because 
+    HTCondor destroys sys.executable when launching remote processes - a launched 
+    python process depends on sys.executable to effectively evaluate its
+    module search paths. Without it, regardless of which python interpreter you launch
+    you will get the to built in module search paths.
+
+    We use the ip{cluster, engine, controller} scripts as our executable to circumvent 
+    this - the mechanism of shebanged scripts means that the python binary will be 
+    launched with argv[0] set to the *location of the ip{cluster, engine, controller} 
+    scripts on the remote node*. This means you need to take care that:
+      a. Your remote nodes have their paths configured correctly, with the ipengine and ipcontroller
+         of the python environment you wish to execute code in having top precedence.
+      b. This functionality is untested on Windows.
+
+    If you need different behavior, consider making you own template.
+    """
+
+    submit_command = List(['condor_submit'], config=True,
+        help="The HTCondor submit command ['condor_submit']")
+    delete_command = List(['condor_rm'], config=True,
+        help="The HTCondor delete command ['condor_rm']")
+    job_id_regexp = CRegExp(r'(\d+)\.$', config=True,
+        help="Regular expression for identifying the job ID [r'(\d+)\.$']")
+    job_id_regexp_group = Integer(1, config=True,
+        help="""The group we wish to match in job_id_regexp [1]""")
+
+    job_array_regexp = CRegExp('queue\W+\$')
+    job_array_template = Unicode('queue {n}')
+
+
+    def _insert_job_array_in_script(self):
+        """Inserts a job array if required into the batch script.
+        """
+        if not self.job_array_regexp.search(self.batch_template):
+            self.log.debug("adding job array settings to batch script")
+            #HTCondor requires that the job array goes at the bottom of the script
+            self.batch_template = '\n'.join([self.batch_template,
+                self.job_array_template])
+
+    def _insert_queue_in_script(self):
+        """AFAIK, HTCondor doesn't have a concept of multiple queues that can be
+        specified in the script.
+        """
+        pass
+
+
+class HTCondorControllerLauncher(HTCondorLauncher, BatchClusterAppMixin):
+    """Launch a controller using HTCondor."""
+
+    batch_file_name = Unicode(u'htcondor_controller', config=True,
+                              help="batch file name for the controller job.")
+    default_template = Unicode(r"""
+universe        = vanilla
+executable      = ipcontroller
+# by default we expect a shared file system
+transfer_executable = False
+arguments       = --log-to-file '--profile-dir={profile_dir}' --cluster-id='{cluster_id}'
+""")
+
+    def start(self):
+        """Start the controller by profile or profile_dir."""
+        return super(HTCondorControllerLauncher, self).start(1)
+
+
+class HTCondorEngineSetLauncher(HTCondorLauncher, BatchClusterAppMixin):
+    """Launch Engines using HTCondor"""
+    batch_file_name = Unicode(u'htcondor_engines', config=True,
+                              help="batch file name for the engine(s) job.")
+    default_template = Unicode("""
+universe        = vanilla
+executable      = ipengine
+# by default we expect a shared file system
+transfer_executable = False
+arguments       = "--log-to-file '--profile-dir={profile_dir}' '--cluster-id={cluster_id}'"
+""")
 
 
 #-----------------------------------------------------------------------------
@@ -1319,6 +1419,7 @@ ssh_launchers = [
     SSHControllerLauncher,
     SSHEngineLauncher,
     SSHEngineSetLauncher,
+    SSHProxyEngineSetLauncher,
 ]
 winhpc_launchers = [
     WindowsHPCLauncher,
@@ -1340,6 +1441,10 @@ lsf_launchers = [
     LSFControllerLauncher,
     LSFEngineSetLauncher,
 ]
+htcondor_launchers = [
+    HTCondorLauncher,
+    HTCondorControllerLauncher,
+    HTCondorEngineSetLauncher,
+]
 all_launchers = local_launchers + mpi_launchers + ssh_launchers + winhpc_launchers\
-                + pbs_launchers + sge_launchers + lsf_launchers
-
+                + pbs_launchers + sge_launchers + lsf_launchers + htcondor_launchers

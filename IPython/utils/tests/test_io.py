@@ -15,14 +15,18 @@ from __future__ import print_function
 
 import sys
 
-from StringIO import StringIO
 from subprocess import Popen, PIPE
+import unittest
 
 import nose.tools as nt
 
-from IPython.testing import decorators as dec
 from IPython.utils.io import Tee, capture_output
-from IPython.utils.py3compat import doctest_refactor_print
+from IPython.utils.py3compat import doctest_refactor_print, PY3
+
+if PY3:
+    from io import StringIO
+else:
+    from StringIO import StringIO
 
 #-----------------------------------------------------------------------------
 # Tests
@@ -38,7 +42,7 @@ def test_tee_simple():
     nt.assert_equal(chan.getvalue(), text+"\n")
 
 
-class TeeTestCase(dec.ParametricTestCase):
+class TeeTestCase(unittest.TestCase):
 
     def tchan(self, channel, check='close'):
         trap = StringIO()
@@ -61,7 +65,7 @@ class TeeTestCase(dec.ParametricTestCase):
     def test(self):
         for chan in ['stdout', 'stderr']:
             for check in ['close', 'del']:
-                yield self.tchan(chan, check)
+                self.tchan(chan, check)
 
 def test_io_init():
     """Test that io.stdin/out/err exist at startup"""

@@ -148,16 +148,16 @@ class TestTraitType(TestCase):
 
         a = A()
         self.assertEqual(a._trait_values, {})
-        self.assertEqual(a._trait_dyn_inits.keys(), ['x'])
+        self.assertEqual(list(a._trait_dyn_inits.keys()), ['x'])
         self.assertEqual(a.x, 11)
         self.assertEqual(a._trait_values, {'x': 11})
         b = B()
         self.assertEqual(b._trait_values, {'x': 20})
-        self.assertEqual(a._trait_dyn_inits.keys(), ['x'])
+        self.assertEqual(list(a._trait_dyn_inits.keys()), ['x'])
         self.assertEqual(b.x, 20)
         c = C()
         self.assertEqual(c._trait_values, {})
-        self.assertEqual(a._trait_dyn_inits.keys(), ['x'])
+        self.assertEqual(list(a._trait_dyn_inits.keys()), ['x'])
         self.assertEqual(c.x, 21)
         self.assertEqual(c._trait_values, {'x': 21})
         # Ensure that the base class remains unmolested when the _default
@@ -165,7 +165,7 @@ class TestTraitType(TestCase):
         a = A()
         c = C()
         self.assertEqual(a._trait_values, {})
-        self.assertEqual(a._trait_dyn_inits.keys(), ['x'])
+        self.assertEqual(list(a._trait_dyn_inits.keys()), ['x'])
         self.assertEqual(a.x, 11)
         self.assertEqual(a._trait_values, {'x': 11})
 
@@ -363,6 +363,44 @@ class TestHasTraitsNotify(TestCase):
 
         self.assertEqual(len(a._trait_notifiers['a']),0)
 
+    def test_notify_only_once(self):
+
+        class A(HasTraits):
+            listen_to = ['a']
+            
+            a = Int(0)
+            b = 0
+            
+            def __init__(self, **kwargs):
+                super(A, self).__init__(**kwargs)
+                self.on_trait_change(self.listener1, ['a'])
+            
+            def listener1(self, name, old, new):
+                self.b += 1
+
+        class B(A):
+                    
+            c = 0
+            d = 0
+            
+            def __init__(self, **kwargs):
+                super(B, self).__init__(**kwargs)
+                self.on_trait_change(self.listener2)
+            
+            def listener2(self, name, old, new):
+                self.c += 1
+            
+            def _a_changed(self, name, old, new):
+                self.d += 1
+
+        b = B()
+        b.a += 1
+        self.assertEqual(b.b, b.c)
+        self.assertEqual(b.b, b.d)
+        b.a += 1
+        self.assertEqual(b.b, b.c)
+        self.assertEqual(b.b, b.d)
+
 
 class TestHasTraits(TestCase):
 
@@ -410,6 +448,18 @@ class TestHasTraits(TestCase):
         a = A(i=1, x=10.0)
         self.assertEqual(a.i, 1)
         self.assertEqual(a.x, 10.0)
+
+    def test_positional_args(self):
+        class A(HasTraits):
+            i = Int(0)
+            def __init__(self, i):
+                super(A, self).__init__()
+                self.i = i
+        
+        a = A(5)
+        self.assertEqual(a.i, 5)
+        # should raise TypeError if no positional arg given
+        self.assertRaises(TypeError, A)
 
 #-----------------------------------------------------------------------------
 # Tests for specific trait types
@@ -668,26 +718,27 @@ class TestInt(TraitTestBase):
                       10.1, -10.1, '10L', '-10L', '10.1', '-10.1', u'10L',
                       u'-10L', u'10.1', u'-10.1',  '10', '-10', u'10', u'-10']
     if not py3compat.PY3:
-        _bad_values.extend([10L, -10L, 10*sys.maxint, -10*sys.maxint])
+        _bad_values.extend([long(10), long(-10), 10*sys.maxint, -10*sys.maxint])
 
 
 class LongTrait(HasTraits):
 
-    value = Long(99L)
+    value = Long(99 if py3compat.PY3 else long(99))
 
 class TestLong(TraitTestBase):
 
     obj = LongTrait()
 
-    _default_value = 99L
-    _good_values   = [10, -10, 10L, -10L]
-    _bad_values    = ['ten', u'ten', [10], [10l], {'ten': 10},(10,),(10L,),
+    _default_value = 99 if py3compat.PY3 else long(99)
+    _good_values   = [10, -10]
+    _bad_values    = ['ten', u'ten', [10], {'ten': 10},(10,),
                       None, 1j, 10.1, -10.1, '10', '-10', '10L', '-10L', '10.1',
                       '-10.1', u'10', u'-10', u'10L', u'-10L', u'10.1',
                       u'-10.1']
     if not py3compat.PY3:
         # maxint undefined on py3, because int == long
-        _good_values.extend([10*sys.maxint, -10*sys.maxint])
+        _good_values.extend([long(10), long(-10), 10*sys.maxint, -10*sys.maxint])
+        _bad_values.extend([[long(10)], (long(10),)])
 
     @skipif(py3compat.PY3, "not relevant on py3")
     def test_cast_small(self):
@@ -712,7 +763,7 @@ class TestInteger(TestLong):
         if py3compat.PY3:
             raise SkipTest("not relevant on py3")
 
-        self.obj.value = 100L
+        self.obj.value = long(100)
         self.assertEqual(type(self.obj.value), int)
 
 
@@ -730,7 +781,7 @@ class TestFloat(TraitTestBase):
                       1j, '10', '-10', '10L', '-10L', '10.1', '-10.1', u'10',
                       u'-10', u'10L', u'-10L', u'10.1', u'-10.1']
     if not py3compat.PY3:
-        _bad_values.extend([10L, -10L])
+        _bad_values.extend([long(10), long(-10)])
 
 
 class ComplexTrait(HasTraits):
@@ -746,7 +797,7 @@ class TestComplex(TraitTestBase):
                       10.1j, 10.1+10.1j, 10.1-10.1j]
     _bad_values    = [u'10L', u'-10L', 'ten', [10], {'ten': 10},(10,), None]
     if not py3compat.PY3:
-        _bad_values.extend([10L, -10L])
+        _bad_values.extend([long(10), long(-10)])
 
 
 class BytesTrait(HasTraits):
@@ -760,8 +811,10 @@ class TestBytes(TraitTestBase):
     _default_value = b'string'
     _good_values   = [b'10', b'-10', b'10L',
                       b'-10L', b'10.1', b'-10.1', b'string']
-    _bad_values    = [10, -10, 10L, -10L, 10.1, -10.1, 1j, [10],
+    _bad_values    = [10, -10, 10.1, -10.1, 1j, [10],
                       ['ten'],{'ten': 10},(10,), None,  u'string']
+    if not py3compat.PY3:
+        _bad_values.extend([long(10), long(-10)])
 
 
 class UnicodeTrait(HasTraits):
@@ -775,8 +828,10 @@ class TestUnicode(TraitTestBase):
     _default_value = u'unicode'
     _good_values   = ['10', '-10', '10L', '-10L', '10.1',
                       '-10.1', '', u'', 'string', u'string', u"€"]
-    _bad_values    = [10, -10, 10L, -10L, 10.1, -10.1, 1j,
+    _bad_values    = [10, -10, 10.1, -10.1, 1j,
                       [10], ['ten'], [u'ten'], {'ten': 10},(10,), None]
+    if not py3compat.PY3:
+        _bad_values.extend([long(10), long(-10)])
 
 
 class ObjectNameTrait(HasTraits):
@@ -831,7 +886,7 @@ class TestList(TraitTestBase):
     obj = ListTrait()
 
     _default_value = []
-    _good_values = [[], [1], range(10)]
+    _good_values = [[], [1], list(range(10))]
     _bad_values = [10, [1,'a'], 'a', (1,2)]
 
 class LenListTrait(HasTraits):
@@ -843,8 +898,8 @@ class TestLenList(TraitTestBase):
     obj = LenListTrait()
 
     _default_value = [0]
-    _good_values = [[1], range(2)]
-    _bad_values = [10, [1,'a'], 'a', (1,2), [], range(3)]
+    _good_values = [[1], list(range(2))]
+    _bad_values = [10, [1,'a'], 'a', (1,2), [], list(range(3))]
 
 class TupleTrait(HasTraits):
 

@@ -55,9 +55,43 @@ class TestLoadBalancedView(ClusterTestCase):
     def test_map(self):
         def f(x):
             return x**2
-        data = range(16)
+        data = list(range(16))
         r = self.view.map_sync(f, data)
-        self.assertEqual(r, map(f, data))
+        self.assertEqual(r, list(map(f, data)))
+    
+    def test_map_generator(self):
+        def f(x):
+            return x**2
+        
+        data = list(range(16))
+        r = self.view.map_sync(f, iter(data))
+        self.assertEqual(r, list(map(f, iter(data))))
+    
+    def test_map_short_first(self):
+        def f(x,y):
+            if y is None:
+                return y
+            if x is None:
+                return x
+            return x*y
+        data = list(range(10))
+        data2 = list(range(4))
+        
+        r = self.view.map_sync(f, data, data2)
+        self.assertEqual(r, list(map(f, data, data2)))
+
+    def test_map_short_last(self):
+        def f(x,y):
+            if y is None:
+                return y
+            if x is None:
+                return x
+            return x*y
+        data = list(range(4))
+        data2 = list(range(10))
+        
+        r = self.view.map_sync(f, data, data2)
+        self.assertEqual(r, list(map(f, data, data2)))
 
     def test_map_unordered(self):
         def f(x):
@@ -66,8 +100,8 @@ class TestLoadBalancedView(ClusterTestCase):
             import time
             time.sleep(0.05*x)
             return x**2
-        data = range(16,0,-1)
-        reference = map(f, data)
+        data = list(range(16,0,-1))
+        reference = list(map(f, data))
         
         amr = self.view.map_async(slow_f, data, ordered=False)
         self.assertTrue(isinstance(amr, pmod.AsyncMapResult))
@@ -85,8 +119,8 @@ class TestLoadBalancedView(ClusterTestCase):
             import time
             time.sleep(0.05*x)
             return x**2
-        data = range(16,0,-1)
-        reference = map(f, data)
+        data = list(range(16,0,-1))
+        reference = list(map(f, data))
         
         amr = self.view.map_async(slow_f, data)
         self.assertTrue(isinstance(amr, pmod.AsyncMapResult))
@@ -121,16 +155,26 @@ class TestLoadBalancedView(ClusterTestCase):
         self.assertRaises(error.TaskAborted, ar3.get)
 
     def test_retries(self):
+        self.minimum_engines(3)
         view = self.view
-        view.timeout = 1 # prevent hang if this doesn't behave
         def fail():
             assert False
         for r in range(len(self.client)-1):
             with view.temp_flags(retries=r):
                 self.assertRaisesRemote(AssertionError, view.apply_sync, fail)
 
-        with view.temp_flags(retries=len(self.client), timeout=0.25):
+        with view.temp_flags(retries=len(self.client), timeout=0.1):
             self.assertRaisesRemote(error.TaskTimeout, view.apply_sync, fail)
+
+    def test_short_timeout(self):
+        self.minimum_engines(2)
+        view = self.view
+        def fail():
+            import time
+            time.sleep(0.25)
+            assert False
+        with view.temp_flags(retries=1, timeout=0.01):
+            self.assertRaisesRemote(AssertionError, view.apply_sync, fail)
 
     def test_invalid_dependency(self):
         view = self.view

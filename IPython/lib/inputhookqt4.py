@@ -16,9 +16,20 @@ Author: Christian Boos
 # Imports
 #-----------------------------------------------------------------------------
 
+import os
+import signal
+import threading
+
 from IPython.core.interactiveshell import InteractiveShell
 from IPython.external.qt_for_kernel import QtCore, QtGui
 from IPython.lib.inputhook import allow_CTRL_C, ignore_CTRL_C, stdin_ready
+
+#-----------------------------------------------------------------------------
+# Module Globals
+#-----------------------------------------------------------------------------
+
+got_kbdint = False
+sigint_timer = None
 
 #-----------------------------------------------------------------------------
 # Code
@@ -64,8 +75,6 @@ def create_inputhook_qt4(mgr, app=None):
     # Otherwise create the inputhook_qt4/preprompthook_qt4 pair of
     # hooks (they both share the got_kbdint flag)
 
-    got_kbdint = [False]
-
     def inputhook_qt4():
         """PyOS_InputHook python hook for Qt4.
 
@@ -85,17 +94,60 @@ def create_inputhook_qt4(mgr, app=None):
                 return 0
             app.processEvents(QtCore.QEventLoop.AllEvents, 300)
             if not stdin_ready():
+                # Generally a program would run QCoreApplication::exec()
+                # from main() to enter and process the Qt event loop until
+                # quit() or exit() is called and the program terminates.
+                #
+                # For our input hook integration, we need to repeatedly
+                # enter and process the Qt event loop for only a short
+                # amount of time (say 50ms) to ensure that Python stays
+                # responsive to other user inputs.
+                #
+                # A naive approach would be to repeatedly call
+                # QCoreApplication::exec(), using a timer to quit after a
+                # short amount of time. Unfortunately, QCoreApplication
+                # emits an aboutToQuit signal before stopping, which has
+                # the undesirable effect of closing all modal windows.
+                #
+                # To work around this problem, we instead create a
+                # QEventLoop and call QEventLoop::exec(). Other than
+                # setting some state variables which do not seem to be
+                # used anywhere, the only thing QCoreApplication adds is
+                # the aboutToQuit signal which is precisely what we are
+                # trying to avoid.
                 timer = QtCore.QTimer()
-                timer.timeout.connect(app.quit)
+                event_loop = QtCore.QEventLoop()
+                timer.timeout.connect(event_loop.quit)
                 while not stdin_ready():
                     timer.start(50)
-                    app.exec_()
+                    event_loop.exec_()
                     timer.stop()
         except KeyboardInterrupt:
+            global got_kbdint, sigint_timer
+
             ignore_CTRL_C()
-            got_kbdint[0] = True
-            print("\nKeyboardInterrupt - Ctrl-C again for new prompt")
+            got_kbdint = True
             mgr.clear_inputhook()
+
+            # This generates a second SIGINT so the user doesn't have to
+            # press CTRL+C twice to get a clean prompt.
+            #
+            # Since we can't catch the resulting KeyboardInterrupt here
+            # (because this is a ctypes callback), we use a timer to
+            # generate the SIGINT after we leave this callback.
+            #
+            # Unfortunately this doesn't work on Windows (SIGINT kills
+            # Python and CTRL_C_EVENT doesn't work).
+            if(os.name == 'posix'):
+                pid = os.getpid()
+                if(not sigint_timer):
+                    sigint_timer = threading.Timer(.01, os.kill,
+                                         args=[pid, signal.SIGINT] )
+                    sigint_timer.start()
+            else:
+                print("\nKeyboardInterrupt - Ctrl-C again for new prompt")
+
+
         except: # NO exceptions are allowed to escape from a ctypes callback
             ignore_CTRL_C()
             from traceback import print_exc
@@ -112,9 +164,15 @@ def create_inputhook_qt4(mgr, app=None):
         (in case the latter was temporarily deactivated after a
         CTRL+C)
         """
-        if got_kbdint[0]:
+        global got_kbdint, sigint_timer
+
+        if(sigint_timer):
+            sigint_timer.cancel()
+            sigint_timer = None
+
+        if got_kbdint:
             mgr.set_inputhook(inputhook_qt4)
-        got_kbdint[0] = False
+        got_kbdint = False
 
     ip._inputhook_qt4 = inputhook_qt4
     ip.set_hook('pre_prompt_hook', preprompthook_qt4)

@@ -27,8 +27,7 @@ maintained here for backwards compatablitiy with old SymPy versions.
 #-----------------------------------------------------------------------------
 
 from IPython.lib.latextools import latex_to_png
-from IPython.testing import decorators as dec
-# use @dec.skipif_not_sympy to skip tests requiring sympy
+from IPython.utils.py3compat import string_types
 
 try:
     from sympy import pretty, latex
@@ -87,7 +86,7 @@ def can_print_latex(o):
     if isinstance(o, (list, tuple, set, frozenset)):
         return all(can_print_latex(i) for i in o)
     elif isinstance(o, dict):
-        return all((isinstance(i, basestring) or can_print_latex(i)) and can_print_latex(o[i]) for i in o)
+        return all((isinstance(i, string_types) or can_print_latex(i)) and can_print_latex(o[i]) for i in o)
     elif isinstance(o,(sympy.Basic, sympy.matrices.Matrix, int, long, float)):
         return True
     return False
@@ -117,7 +116,7 @@ def load_ipython_extension(ip):
         pass
     else:
         warnings.warn("The sympyprinting extension in IPython is deprecated, "
-            "use sympy.interactive.ipythonprinting")
+            "use 'from sympy import init_printing; init_printing()'")
         ip.extension_manager.load_extension('sympy.interactive.ipythonprinting')
         return
 

@@ -1,6 +1,32 @@
 # -*- coding: utf-8 -*-
 """
-Cython related magics.
+=====================
+Cython related magics
+=====================
+
+Magic command interface for interactive work with Cython
+
+.. note::
+
+  The ``Cython`` package needs to be installed separately. It
+  can be obtained using ``easy_install`` or ``pip``.
+
+Usage
+=====
+
+To enable the magics below, execute ``%load_ext cythonmagic``.
+
+``%%cython``
+
+{CYTHON_DOC}
+
+``%%cython_inline``
+
+{CYTHON_INLINE_DOC}
+
+``%%cython_pyximport``
+
+{CYTHON_PYXIMPORT_DOC}
 
 Author:
 * Brian Granger
@@ -25,6 +51,11 @@ import sys
 import time
 
 try:
+    reload
+except NameError:   # Python 3
+    from imp import reload
+
+try:
     import hashlib
 except ImportError:
     import md5 as hashlib
@@ -35,8 +66,8 @@ from distutils.command.build_ext import build_ext
 from IPython.core import display
 from IPython.core import magic_arguments
 from IPython.core.magic import Magics, magics_class, cell_magic
-from IPython.testing.skipdoctest import skip_doctest
 from IPython.utils import py3compat
+from IPython.utils.path import get_ipython_cache_dir
 
 import Cython
 from Cython.Compiler.Errors import CompileError
@@ -115,7 +146,7 @@ class CythonMagics(Magics):
              "Extension flag (can be specified  multiple times)."
     )
     @magic_arguments.argument(
-        '-la', '--link-args', action='append', default=[],
+        '--link-args', action='append', default=[],
         help="Extra flags to pass to linker via the `extra_link_args` "
              "Extension flag (can be specified  multiple times)."
     )
@@ -123,6 +154,10 @@ class CythonMagics(Magics):
         '-l', '--lib', action='append', default=[],
         help="Add a library to link the extension against (can be specified "
              "multiple times)."
+    )
+    @magic_arguments.argument(
+        '-n', '--name',
+        help="Specify a name for the Cython module."
     )
     @magic_arguments.argument(
         '-L', dest='library_dirs', metavar='dir', action='append', default=[],
@@ -158,13 +193,19 @@ class CythonMagics(Magics):
         namespace. The usage is similar to that of `%%cython_pyximport` but
         you don't have to pass a module name::
 
-        %%cython
-        def f(x):
-            return 2.0*x
+            %%cython
+            def f(x):
+                return 2.0*x
+
+        To compile OpenMP codes, pass the required  `--compile-args`
+        and `--link-args`.  For example with gcc::
+
+            %%cython --compile-args=-fopenmp --link-args=-fopenmp
+            ...
         """
         args = magic_arguments.parse_argstring(self.cython, line)
         code = cell if cell.endswith('\n') else cell+'\n'
-        lib_dir = os.path.join(self.shell.ipython_dir, 'cython')
+        lib_dir = os.path.join(get_ipython_cache_dir(), 'cython')
         quiet = True
         key = code, sys.version_info, sys.executable, Cython.__version__
 
@@ -176,7 +217,10 @@ class CythonMagics(Magics):
             # key which is hashed to determine the module name.
             key += time.time(),
 
-        module_name = "_cython_magic_" + hashlib.md5(str(key).encode('utf-8')).hexdigest()
+        if args.name:
+            module_name = py3compat.unicode_to_str(args.name)
+        else:
+            module_name = "_cython_magic_" + hashlib.md5(str(key).encode('utf-8')).hexdigest()
         module_path = os.path.join(lib_dir, module_name + self.so_ext)
 
         have_module = os.path.isfile(module_path)
@@ -250,7 +294,20 @@ class CythonMagics(Magics):
             self._so_ext = self._get_build_extension().get_ext_filename('')
             return self._so_ext
 
+    def _clear_distutils_mkpath_cache(self):
+        """clear distutils mkpath cache
+        
+        prevents distutils from skipping re-creation of dirs that have been removed
+        """
+        try:
+            from distutils.dir_util import _path_created
+        except ImportError:
+            pass
+        else:
+            _path_created.clear()
+    
     def _get_build_extension(self):
+        self._clear_distutils_mkpath_cache()
         dist = Distribution()
         config_files = dist.find_config_files()
         try:
@@ -273,11 +330,12 @@ class CythonMagics(Magics):
         html = '\n'.join(l for l in html.splitlines() if not r.match(l))
         return html
 
-_loaded = False
+__doc__ = __doc__.format(
+                CYTHON_DOC = ' '*8 + CythonMagics.cython.__doc__,
+                CYTHON_INLINE_DOC = ' '*8 + CythonMagics.cython_inline.__doc__,
+                CYTHON_PYXIMPORT_DOC = ' '*8 + CythonMagics.cython_pyximport.__doc__,
+)
 
 def load_ipython_extension(ip):
     """Load the extension in IPython."""
-    global _loaded
-    if not _loaded:
-        ip.register_magics(CythonMagics)
-        _loaded = True
+    ip.register_magics(CythonMagics)

@@ -18,15 +18,12 @@ from __future__ import print_function
 __all__ = ['Inspector','InspectColors']
 
 # stdlib modules
-import __builtin__
 import inspect
 import linecache
 import os
-import sys
 import types
 import io as stdlib_io
 
-from collections import namedtuple
 try:
     from itertools import izip_longest
 except ImportError:
@@ -39,10 +36,11 @@ from IPython.utils import PyColorize
 from IPython.utils import io
 from IPython.utils import openpy
 from IPython.utils import py3compat
+from IPython.utils.dir2 import safe_hasattr
 from IPython.utils.text import indent
 from IPython.utils.wildcard import list_namespace
 from IPython.utils.coloransi import *
-from IPython.utils.py3compat import cast_unicode
+from IPython.utils.py3compat import cast_unicode, string_types
 
 #****************************************************************************
 # Builtin color schemes
@@ -132,7 +130,7 @@ def getdoc(obj):
         pass
     else:
         # if we get extra info, we add it to the normal docstring.
-        if isinstance(ds, basestring):
+        if isinstance(ds, string_types):
             return inspect.cleandoc(ds)
     
     try:
@@ -159,8 +157,8 @@ def getsource(obj,is_binary=False):
     Optional inputs:
 
     - is_binary: whether the object is known to come from a binary source.
-    This implementation will skip returning any output for binary objects, but
-    custom extractors may know how to meaningfully process them."""
+      This implementation will skip returning any output for binary objects, but
+      custom extractors may know how to meaningfully process them."""
 
     if is_binary:
         return None
@@ -190,13 +188,13 @@ def getargspec(obj):
     if inspect.isfunction(obj):
         func_obj = obj
     elif inspect.ismethod(obj):
-        func_obj = obj.im_func
+        func_obj = obj.__func__
     elif hasattr(obj, '__call__'):
         func_obj = obj.__call__
     else:
         raise TypeError('arg is not a Python function')
-    args, varargs, varkw = inspect.getargs(func_obj.func_code)
-    return args, varargs, varkw, func_obj.func_defaults
+    args, varargs, varkw = inspect.getargs(func_obj.__code__)
+    return args, varargs, varkw, func_obj.__defaults__
 
 
 def format_argspec(argspec):
@@ -279,7 +277,7 @@ def find_file(obj):
       The absolute path to the file where the object was defined.
     """
     # get source if obj was decorated with @decorator
-    if hasattr(obj, '__wrapped__'):
+    if safe_hasattr(obj, '__wrapped__'):
         obj = obj.__wrapped__
 
     fname = None
@@ -296,7 +294,7 @@ def find_file(obj):
                 pass
     except:
         pass
-    return fname
+    return cast_unicode(fname)
 
 
 def find_source_lines(obj):
@@ -316,7 +314,7 @@ def find_source_lines(obj):
       The line number where the object definition starts.
     """
     # get source if obj was decorated with @decorator
-    if hasattr(obj, '__wrapped__'):
+    if safe_hasattr(obj, '__wrapped__'):
         obj = obj.__wrapped__
     
     try:
@@ -326,6 +324,8 @@ def find_source_lines(obj):
             # For instances, try the class object like getsource() does
             if hasattr(obj, '__class__'):
                 lineno = inspect.getsourcelines(obj.__class__)[1]
+            else:
+                lineno = None
     except:
         return None
 
@@ -344,7 +344,7 @@ class Inspector:
         self.set_active_scheme(scheme)
 
     def _getdef(self,obj,oname=''):
-        """Return the definition header for any callable object.
+        """Return the call signature for any callable object.
 
         If any exception is generated, None is returned instead and the
         exception is suppressed."""
@@ -373,7 +373,7 @@ class Inspector:
             print()
 
     def pdef(self, obj, oname=''):
-        """Print the definition header for any callable object.
+        """Print the call signature for any callable object.
 
         If the object is a class, print the constructor information."""
 
@@ -536,7 +536,7 @@ class Inspector:
         - formatter: special formatter for docstrings (see pdoc)
 
         - info: a structure with some information fields which may have been
-        precomputed already.
+          precomputed already.
 
         - detail_level: if set to 1, more information is given.
         """
@@ -600,7 +600,7 @@ class Inspector:
         - formatter: special formatter for docstrings (see pdoc)
 
         - info: a structure with some information fields which may have been
-        precomputed already.
+          precomputed already.
 
         - detail_level: if set to 1, more information is given.
         """
@@ -777,7 +777,7 @@ class Inspector:
                 out['init_docstring'] = init_ds
 
             # Call form docstring for callable instances
-            if hasattr(obj, '__call__'):
+            if safe_hasattr(obj, '__call__'):
                 call_def = self._getdef(obj.__call__, oname)
                 if call_def is not None:
                     out['call_def'] = self.format(call_def)
@@ -820,8 +820,8 @@ class Inspector:
         Arguments:
 
         - pattern: string containing shell-like wildcards to use in namespace
-        searches and optionally a type specification to narrow the search to
-        objects of that type.
+          searches and optionally a type specification to narrow the search to
+          objects of that type.
 
         - ns_table: dict of name->namespaces for search.
 
@@ -832,7 +832,7 @@ class Inspector:
           - ignore_case(False): make the search case-insensitive.
 
           - show_all(False): show all names, including those starting with
-          underscores.
+            underscores.
         """
         #print 'ps pattern:<%r>' % pattern # dbg
 

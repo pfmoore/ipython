@@ -26,6 +26,7 @@ Usage
 {CONFIG_DOC}
 
 """
+from __future__ import print_function
 
 #-----------------------------------------------------------------------------
 #  Copyright (C) 2008 The IPython Development Team
@@ -69,6 +70,10 @@ def exec_args(f):
         ),
         magic_arguments.argument('-t', '--targets', type=str,
             help="specify the targets on which to execute",
+        ),
+        magic_arguments.argument('--local', action="store_const",
+            const=True, dest="local",
+            help="also execute the cell in the local namespace",
         ),
         magic_arguments.argument('--verbose', action="store_const",
             const=True, dest="set_verbose",
@@ -247,7 +252,7 @@ class ParallelMagics(Magics):
         else:
             str_targets = str(targets)
         if self.verbose:
-            print base + " execution on engine(s): %s" % str_targets
+            print(base + " execution on engine(s): %s" % str_targets)
         
         result = self.view.execute(cell, silent=False, block=False)
         self.last_result = result
@@ -290,14 +295,27 @@ class ParallelMagics(Magics):
         if args.targets:
             save_targets = self.view.targets
             self.view.targets = self._eval_target_str(args.targets)
+        # if running local, don't block until after local has run
+        block = False if args.local else args.block
         try:
-            return self.parallel_execute(cell, block=args.block,
+            ar = self.parallel_execute(cell, block=block,
                                 groupby=args.groupby,
                                 save_name=args.save_name,
             )
         finally:
             if args.targets:
                 self.view.targets = save_targets
+        
+        # run locally after submitting remote
+        block = self.view.block if args.block is None else args.block
+        if args.local:
+            self.shell.run_cell(cell)
+            # now apply blocking behavor to remote execution
+            if block:
+                ar.get()
+                ar.display_outputs(args.groupby)
+        if not block:
+            return ar
     
     @skip_doctest
     def autopx(self, line=''):
@@ -341,7 +359,7 @@ class ParallelMagics(Magics):
         self.shell.run_cell = self.pxrun_cell
 
         self._autopx = True
-        print "%autopx enabled"
+        print("%autopx enabled")
 
     def _disable_autopx(self):
         """Disable %autopx by restoring the original InteractiveShell.run_cell.
@@ -349,7 +367,7 @@ class ParallelMagics(Magics):
         if self._autopx:
             self.shell.run_cell = self._original_run_cell
             self._autopx = False
-            print "%autopx disabled"
+            print("%autopx disabled")
 
     def pxrun_cell(self, raw_cell, store_history=False, silent=False):
         """drop-in replacement for InteractiveShell.run_cell.

@@ -1,4 +1,5 @@
 """toplevel setup/teardown for parallel tests."""
+from __future__ import print_function
 
 #-------------------------------------------------------------------------------
 #  Copyright (C) 2011  The IPython Development Team
@@ -14,7 +15,9 @@
 import os
 import tempfile
 import time
-from subprocess import Popen
+from subprocess import Popen, PIPE, STDOUT
+
+import nose
 
 from IPython.utils.path import get_ipython_dir
 from IPython.parallel import Client
@@ -35,12 +38,15 @@ class TestProcessLauncher(LocalProcessLauncher):
     def start(self):
         if self.state == 'before':
             self.process = Popen(self.args,
-                stdout=blackhole, stderr=blackhole,
+                stdout=nose.ipy_stream_capturer.writefd, stderr=STDOUT,
                 env=os.environ,
                 cwd=self.work_dir
             )
             self.notify_start(self.process.pid)
             self.poll = self.process.poll
+            # Store stdout & stderr to show with failing tests.
+            # This is defined in IPython.testing.iptest
+            nose.ipy_stream_capturer.ensure_started()
         else:
             s = 'The process was already started and has state: %r' % self.state
             raise ProcessStateError(s)
@@ -57,14 +63,13 @@ def setup():
     
     cp = TestProcessLauncher()
     cp.cmd_and_args = ipcontroller_cmd_argv + \
-                ['--profile=iptest', '--log-level=50', '--ping=250', '--dictdb']
+                ['--profile=iptest', '--log-level=20', '--ping=250', '--dictdb']
     cp.start()
     launchers.append(cp)
     tic = time.time()
     while not os.path.exists(engine_json) or not os.path.exists(client_json):
         if cp.poll() is not None:
-            print cp.poll()
-            raise RuntimeError("The test controller failed to start.")
+            raise RuntimeError("The test controller exited with status %s" % cp.poll())
         elif time.time()-tic > 15:
             raise RuntimeError("Timeout waiting for the test controller to start.")
         time.sleep(0.1)
@@ -85,7 +90,11 @@ def add_engines(n=1, profile='iptest', total=False):
     eps = []
     for i in range(n):
         ep = TestProcessLauncher()
-        ep.cmd_and_args = ipengine_cmd_argv + ['--profile=%s'%profile, '--log-level=50']
+        ep.cmd_and_args = ipengine_cmd_argv + [
+            '--profile=%s' % profile,
+            '--log-level=50',
+            '--InteractiveShell.colors=nocolor'
+            ]
         ep.start()
         launchers.append(ep)
         eps.append(ep)
@@ -108,15 +117,15 @@ def teardown():
             try:
                 p.stop()
             except Exception as e:
-                print e
+                print(e)
                 pass
         if p.poll() is None:
             time.sleep(.25)
         if p.poll() is None:
             try:
-                print 'cleaning up test process...'
+                print('cleaning up test process...')
                 p.signal(SIGKILL)
             except:
-                print "couldn't shutdown process: ", p
+                print("couldn't shutdown process: ", p)
     blackhole.close()
     

@@ -26,7 +26,7 @@ import subprocess
 
 from IPython.utils.process import find_cmd, FindCmdError
 from IPython.config.configurable import SingletonConfigurable
-from IPython.utils.traitlets import Instance, List, CBool, CUnicode
+from IPython.utils.traitlets import List, CBool, CUnicode
 from IPython.utils.py3compat import bytes_to_str
 
 #-----------------------------------------------------------------------------
@@ -143,10 +143,9 @@ def latex_to_png_dvipng(s, wrap):
                 stdout=devnull, stderr=devnull)
 
         with open(outfile, "rb") as f:
-            bin_data = f.read()
+            return f.read()
     finally:
         shutil.rmtree(workdir)
-    return bin_data
 
 
 def kpsewhich(filename):

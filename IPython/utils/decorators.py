@@ -33,6 +33,10 @@ def flag_calls(func):
 
     Testing for truth in wrapper.called allows you to determine if a call to
     func() was attempted and succeeded."""
+    
+    # don't wrap twice
+    if hasattr(func, 'called'):
+        return func
 
     def wrapper(*args,**kw):
         wrapper.called = False
@@ -43,4 +47,12 @@ def flag_calls(func):
     wrapper.called = False
     wrapper.__doc__ = func.__doc__
     return wrapper
+
+def undoc(func):
+    """Mark a function or class as undocumented.
+    
+    This is found by inspecting the AST, so for now it must be used directly
+    as @undoc, not as e.g. @decorators.undoc
+    """
+    return func
 

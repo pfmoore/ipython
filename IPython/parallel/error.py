@@ -2,6 +2,11 @@
 
 """Classes and functions for kernel related errors and exceptions.
 
+Inheritance diagram:
+
+.. inheritance-diagram:: IPython.parallel.error
+   :parts: 3
+
 Authors:
 
 * Brian Granger
@@ -11,6 +16,8 @@ from __future__ import print_function
 
 import sys
 import traceback
+
+from IPython.utils.py3compat import unicode_type
 
 __docformat__ = "restructuredtext en"
 
@@ -35,123 +42,19 @@ class IPythonError(Exception):
 
     pass
 
-# Exceptions associated with the controller objects
-class ControllerError(IPythonError): pass
-
-class ControllerCreationError(ControllerError): pass
-
-
-# Exceptions associated with the Engines
-class EngineError(IPythonError): pass
-
-class EngineCreationError(EngineError): pass
-
 class KernelError(IPythonError):
     pass
 
-class NotDefined(KernelError):
-    def __init__(self, name):
-        self.name = name
-        self.args = (name,)
-
-    def __repr__(self):
-        return '<NotDefined: %s>' % self.name
-
-    __str__ = __repr__
-
-
-class QueueCleared(KernelError):
+class EngineError(KernelError):
     pass
-
-
-class IdInUse(KernelError):
-    pass
-
-
-class ProtocolError(KernelError):
-    pass
-
-
-class ConnectionError(KernelError):
-    pass
-
-
-class InvalidEngineID(KernelError):
-    pass
-
 
 class NoEnginesRegistered(KernelError):
     pass
 
-
-class InvalidClientID(KernelError):
-    pass
-
-
-class InvalidDeferredID(KernelError):
-    pass
-
-
-class SerializationError(KernelError):
-    pass
-
-
-class MessageSizeError(KernelError):
-    pass
-
-
-class PBMessageSizeError(MessageSizeError):
-    pass
-
-
-class ResultNotCompleted(KernelError):
-    pass
-
-
-class ResultAlreadyRetrieved(KernelError):
-    pass
-
-class ClientError(KernelError):
-    pass
-
-
 class TaskAborted(KernelError):
     pass
 
-
 class TaskTimeout(KernelError):
-    pass
-
-
-class NotAPendingResult(KernelError):
-    pass
-
-
-class UnpickleableException(KernelError):
-    pass
-
-
-class AbortedPendingDeferredError(KernelError):
-    pass
-
-
-class InvalidProperty(KernelError):
-    pass
-
-
-class MissingBlockArgument(KernelError):
-    pass
-
-
-class StopLocalExecution(KernelError):
-    pass
-
-
-class SecurityError(KernelError):
-    pass
-
-
-class FileTimeoutError(KernelError):
     pass
 
 class TimeoutError(KernelError):
@@ -227,6 +130,8 @@ class TaskRejectError(KernelError):
 
 class CompositeError(RemoteError):
     """Error for representing possibly multiple errors on engines"""
+    tb_limit = 4 # limit on how many tracebacks to draw
+    
     def __init__(self, message, elist):
         Exception.__init__(self, *(message, elist))
         # Don't use pack_exception because it will conflict with the .message
@@ -251,22 +156,28 @@ class CompositeError(RemoteError):
 
     def __str__(self):
         s = str(self.msg)
-        for en, ev, etb, ei in self.elist:
+        for en, ev, etb, ei in self.elist[:self.tb_limit]:
             engine_str = self._get_engine_str(ei)
             s = s + '\n' + engine_str + en + ': ' + str(ev)
+        if len(self.elist) > self.tb_limit:
+            s = s + '\n.... %i more exceptions ...' % (len(self.elist) - self.tb_limit)
         return s
 
     def __repr__(self):
-        return "CompositeError(%i)"%len(self.elist)
+        return "CompositeError(%i)" % len(self.elist)
     
     def render_traceback(self, excid=None):
         """render one or all of my tracebacks to a list of lines"""
         lines = []
         if excid is None:
-            for (en,ev,etb,ei) in self.elist:
+            for (en,ev,etb,ei) in self.elist[:self.tb_limit]:
                 lines.append(self._get_engine_str(ei))
                 lines.extend((etb or 'No traceback available').splitlines())
                 lines.append('')
+            if len(self.elist) > self.tb_limit:
+                lines.append(
+                    '... %i more exceptions ...' % (len(self.elist) - self.tb_limit)
+                )
         else:
             try:
                 en,ev,etb,ei = self.elist[excid]
@@ -327,8 +238,8 @@ def wrap_exception(engine_info={}):
     exc_content = {
         'status' : 'error',
         'traceback' : stb,
-        'ename' : unicode(etype.__name__),
-        'evalue' : unicode(evalue),
+        'ename' : unicode_type(etype.__name__),
+        'evalue' : unicode_type(evalue),
         'engine_info' : engine_info
     }
     return exc_content

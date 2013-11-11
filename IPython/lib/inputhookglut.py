@@ -2,6 +2,7 @@
 """
 GLUT Inputhook support functions
 """
+from __future__ import print_function
 
 #-----------------------------------------------------------------------------
 #  Copyright (C) 2008-2011  The IPython Development Team
@@ -33,7 +34,6 @@ import os
 import sys
 import time
 import signal
-import OpenGL
 import OpenGL.GLUT as glut
 import OpenGL.platform as platform
 from timeit import default_timer as clock
@@ -115,7 +115,7 @@ def glut_close():
 def glut_int_handler(signum, frame):
     # Catch sigint and print the defautl message
     signal.signal(signal.SIGINT, signal.default_int_handler)
-    print '\nKeyboardInterrupt'
+    print('\nKeyboardInterrupt')
     # Need to reprint the prompt at this stage
 
 
@@ -158,10 +158,7 @@ def inputhook_glut():
             # 0.01    1.5%
             # 0.05    0.5%
             used_time = clock() - t
-            if used_time > 5*60.0:
-                # print 'Sleep for 5 s'  # dbg
-                time.sleep(5.0)
-            elif used_time > 10.0:
+            if used_time > 10.0:
                 # print 'Sleep for 1 s'  # dbg
                 time.sleep(1.0)
             elif used_time > 0.1:

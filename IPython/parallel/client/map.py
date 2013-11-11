@@ -26,7 +26,6 @@ Authors:
 
 from __future__ import division
 
-import types
 from itertools import islice
 
 from IPython.utils.data import flatten as utils_flatten
@@ -56,35 +55,36 @@ else:
     arrayModules.append({'module':numarray,
         'type':numarray.numarraycore.NumArray})
 
-class Map:
+class Map(object):
     """A class for partitioning a sequence using a map."""
-            
-    def getPartition(self, seq, p, q):
-        """Returns the pth partition of q partitions of seq."""
+    
+    def getPartition(self, seq, p, q, n=None):
+        """Returns the pth partition of q partitions of seq.
         
+        The length can be specified as `n`,
+        otherwise it is the value of `len(seq)`
+        """
+        n = len(seq) if n is None else n
         # Test for error conditions here
         if p<0 or p>=q:
-          print "No partition exists."
-          return
-          
-        remainder = len(seq)%q
-        basesize = len(seq)//q
-        hi = []
-        lo = []
-        for n in range(q):
-            if n < remainder:
-                lo.append(n * (basesize + 1))
-                hi.append(lo[-1] + basesize + 1)
-            else:
-                lo.append(n*basesize + remainder)
-                hi.append(lo[-1] + basesize)
+          raise ValueError("must have 0 <= p <= q, but have p=%s,q=%s" % (p, q))
+        
+        remainder = n % q
+        basesize = n // q
+        
+        if p < remainder:
+            low = p * (basesize + 1)
+            high = low + basesize + 1
+        else:
+            low = p * basesize + remainder
+            high = low + basesize
         
         try:
-            result = seq[lo[p]:hi[p]]
+            result = seq[low:high]
         except TypeError:
             # some objects (iterators) can't be sliced,
             # use islice:
-            result = list(islice(seq, lo[p], hi[p]))
+            result = list(islice(seq, low, high))
             
         return result
            
@@ -99,25 +99,20 @@ class Map:
             if isinstance(testObject, m['type']):
                 return m['module'].concatenate(listOfPartitions)
         # Next try for Python sequence types
-        if isinstance(testObject, (types.ListType, types.TupleType)):
+        if isinstance(testObject, (list, tuple)):
             return utils_flatten(listOfPartitions)
         # If we have scalars, just return listOfPartitions
         return listOfPartitions
 
 class RoundRobinMap(Map):
-    """Partitions a sequence in a roun robin fashion.
+    """Partitions a sequence in a round robin fashion.
     
     This currently does not work!
     """
 
-    def getPartition(self, seq, p, q):
-        # if not isinstance(seq,(list,tuple)):
-        #     raise NotImplementedError("cannot RR partition type %s"%type(seq))
-        return seq[p:len(seq):q]
-        #result = []
-        #for i in range(p,len(seq),q):
-        #    result.append(seq[i])
-        #return result
+    def getPartition(self, seq, p, q, n=None):
+        n = len(seq) if n is None else n
+        return seq[p:n:q]
 
     def joinPartitions(self, listOfPartitions):
         testObject = listOfPartitions[0]
@@ -126,7 +121,7 @@ class RoundRobinMap(Map):
             #print m
             if isinstance(testObject, m['type']):
                 return self.flatten_array(m['type'], listOfPartitions)
-        if isinstance(testObject, (types.ListType, types.TupleType)):
+        if isinstance(testObject, (list, tuple)):
             return self.flatten_list(listOfPartitions)
         return listOfPartitions
     

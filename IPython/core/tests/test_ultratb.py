@@ -6,6 +6,7 @@ import os.path
 import unittest
 
 from IPython.testing import tools as tt
+from IPython.testing.decorators import onlyif_unicode_paths
 from IPython.utils.syspathcontext import prepended_to_syspath
 from IPython.utils.tempdir import TemporaryDirectory
 
@@ -59,9 +60,22 @@ def fail():
 '''
 
 class NonAsciiTest(unittest.TestCase):
-    def test_iso8859_5(self):
+    @onlyif_unicode_paths
+    def test_nonascii_path(self):
         # Non-ascii directory name as well.
         with TemporaryDirectory(suffix=u'é') as td:
+            fname = os.path.join(td, u"fooé.py")
+            with open(fname, "w") as f:
+                f.write(file_1)
+            
+            with prepended_to_syspath(td):
+                ip.run_cell("import foo")
+            
+            with tt.AssertPrints("ZeroDivisionError"):
+                ip.run_cell("foo.f()")
+    
+    def test_iso8859_5(self):
+        with TemporaryDirectory() as td:
             fname = os.path.join(td, 'dfghjkl.py')
 
             with io.open(fname, 'w', encoding='iso-8859-5') as f:
@@ -94,8 +108,42 @@ class IndentationErrorTest(unittest.TestCase):
                 with tt.AssertPrints("zoon()", suppress=False):
                     ip.magic('run %s' % fname)
 
+se_file_1 = """1
+2
+7/
+"""
+
+se_file_2 = """7/
+"""
+
 class SyntaxErrorTest(unittest.TestCase):
     def test_syntaxerror_without_lineno(self):
         with tt.AssertNotPrints("TypeError"):
             with tt.AssertPrints("line unknown"):
                 ip.run_cell("raise SyntaxError()")
+
+    def test_changing_py_file(self):
+        with TemporaryDirectory() as td:
+            fname = os.path.join(td, "foo.py")
+            with open(fname, 'w') as f:
+                f.write(se_file_1)
+
+            with tt.AssertPrints(["7/", "SyntaxError"]):
+                ip.magic("run " + fname)
+
+            # Modify the file
+            with open(fname, 'w') as f:
+                f.write(se_file_2)
+
+            # The SyntaxError should point to the correct line
+            with tt.AssertPrints(["7/", "SyntaxError"]):
+                ip.magic("run " + fname)
+
+    def test_non_syntaxerror(self):
+        # SyntaxTB may be called with an error other than a SyntaxError
+        # See e.g. gh-4361
+        try:
+            raise ValueError('QWERTY')
+        except ValueError:
+            with tt.AssertPrints('QWERTY'):
+                ip.showsyntaxerror()

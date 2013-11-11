@@ -7,7 +7,6 @@ from __future__ import print_function
 VERBOSE = True
 
 # stdlib imports
-import StringIO
 import sys
 import unittest
 import re
@@ -15,20 +14,26 @@ import re
 # IPython imports
 from IPython.lib import irunner
 from IPython.testing import decorators
+from IPython.utils.py3compat import PY3
+
+if PY3:
+    from io import StringIO
+else:
+    from StringIO import StringIO
 
 def pylab_not_importable():
-    """Test if importing pylab fails with RuntimeError (true when having no display)"""
+    """Test if importing pylab fails. (For example, when having no display)"""
     try:
         import pylab
         return False
-    except RuntimeError:
+    except:
         return True
 
 # Testing code begins
 class RunnerTestCase(unittest.TestCase):
 
     def setUp(self):
-        self.out = StringIO.StringIO()
+        self.out = StringIO()
         #self.out = sys.stdout
 
     def _test_runner(self,runner,source,output):
@@ -66,6 +71,7 @@ class RunnerTestCase(unittest.TestCase):
         self.assertTrue(mismatch==0,'Number of mismatched lines: %s' %
                         mismatch)
 
+    @decorators.skip_if_no_x11
     @decorators.skipif_not_matplotlib
     @decorators.skipif(pylab_not_importable, "Likely a run without X.")
     def test_pylab_import_all_enabled(self):
@@ -83,8 +89,8 @@ In \[1\]: from IPython\.config\.application import Application
 In \[2\]: app = Application\.instance\(\)
 In \[3\]: app\.pylab_import_all = True
 In \[4\]: pylab
-^Welcome to pylab, a matplotlib-based Python environment
-For more information, type 'help\(pylab\)'\.
+^Using matplotlib backend:
+Populating the interactive namespace from numpy and matplotlib
 In \[5\]: ip=get_ipython\(\)
 In \[6\]: \'plot\' in ip\.user_ns
 Out\[6\]: True
@@ -92,6 +98,7 @@ Out\[6\]: True
         runner = irunner.IPythonRunner(out=self.out)
         self._test_runner(runner,source,output)
 
+    @decorators.skip_if_no_x11
     @decorators.skipif_not_matplotlib
     @decorators.skipif(pylab_not_importable, "Likely a run without X.")
     def test_pylab_import_all_disabled(self):
@@ -109,8 +116,8 @@ In \[1\]: from IPython\.config\.application import Application
 In \[2\]: app = Application\.instance\(\)
 In \[3\]: app\.pylab_import_all = False
 In \[4\]: pylab
-^Welcome to pylab, a matplotlib-based Python environment
-For more information, type 'help\(pylab\)'\.
+^Using matplotlib backend:
+Populating the interactive namespace from numpy and matplotlib
 In \[5\]: ip=get_ipython\(\)
 In \[6\]: \'plot\' in ip\.user_ns
 Out\[6\]: False

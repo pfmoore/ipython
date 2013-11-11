@@ -30,7 +30,7 @@ from IPython.parallel import error
 from IPython.parallel import AsyncResult, AsyncHubResult
 from IPython.parallel import LoadBalancedView, DirectView
 
-from clienttest import ClusterTestCase, segfault, wait, add_engines
+from .clienttest import ClusterTestCase, segfault, wait, add_engines
 
 def setup():
     add_engines(4, total=True)
@@ -95,7 +95,7 @@ class TestClient(ClusterTestCase):
         
         def double(x):
             return x*2
-        seq = range(100)
+        seq = list(range(100))
         ref = [ double(x) for x in seq ]
         
         # add some engines, which should be used
@@ -152,10 +152,10 @@ class TestClient(ClusterTestCase):
         ar = c[t].apply_async(wait, 1)
         # give the monitor time to notice the message
         time.sleep(.25)
-        ahr = self.client.get_result(ar.msg_ids)
+        ahr = self.client.get_result(ar.msg_ids[0])
         self.assertTrue(isinstance(ahr, AsyncHubResult))
         self.assertEqual(ahr.get(), ar.get())
-        ar2 = self.client.get_result(ar.msg_ids)
+        ar2 = self.client.get_result(ar.msg_ids[0])
         self.assertFalse(isinstance(ar2, AsyncHubResult))
         c.close()
     
@@ -171,10 +171,10 @@ class TestClient(ClusterTestCase):
         ar = c[t].execute("import time; time.sleep(1)", silent=False)
         # give the monitor time to notice the message
         time.sleep(.25)
-        ahr = self.client.get_result(ar.msg_ids)
+        ahr = self.client.get_result(ar.msg_ids[0])
         self.assertTrue(isinstance(ahr, AsyncHubResult))
         self.assertEqual(ahr.get().pyout, ar.get().pyout)
-        ar2 = self.client.get_result(ar.msg_ids)
+        ar2 = self.client.get_result(ar.msg_ids[0])
         self.assertFalse(isinstance(ar2, AsyncHubResult))
         c.close()
     
@@ -301,13 +301,31 @@ class TestClient(ClusterTestCase):
         self.assertEqual(self.client.hub_history()[-1:],ar.msg_ids)
     
     def _wait_for_idle(self):
-        """wait for an engine to become idle, according to the Hub"""
+        """wait for the cluster to become idle, according to the everyone."""
         rc = self.client
         
+        # step 0. wait for local results
+        # this should be sufficient 99% of the time.
+        rc.wait(timeout=5)
+        
+        # step 1. wait for all requests to be noticed
+        # timeout 5s, polling every 100ms
+        msg_ids = set(rc.history)
+        hub_hist = rc.hub_history()
+        for i in range(50):
+            if msg_ids.difference(hub_hist):
+                time.sleep(0.1)
+                hub_hist = rc.hub_history()
+            else:
+                break
+        
+        self.assertEqual(len(msg_ids.difference(hub_hist)), 0)
+        
+        # step 2. wait for all requests to be done
         # timeout 5s, polling every 100ms
         qs = rc.queue_status()
         for i in range(50):
-            if qs['unassigned'] or any(qs[eid]['tasks'] for eid in rc.ids):
+            if qs['unassigned'] or any(qs[eid]['tasks'] + qs[eid]['queue'] for eid in rc.ids):
                 time.sleep(0.1)
                 qs = rc.queue_status()
             else:
@@ -317,6 +335,7 @@ class TestClient(ClusterTestCase):
         self.assertEqual(qs['unassigned'], 0)
         for eid in rc.ids:
             self.assertEqual(qs[eid]['tasks'], 0)
+            self.assertEqual(qs[eid]['queue'], 0)
     
     
     def test_resubmit(self):
@@ -400,28 +419,76 @@ class TestClient(ClusterTestCase):
         """ensure KeyError on resubmit of nonexistant task"""
         self.assertRaisesRemote(KeyError, self.client.resubmit, ['invalid'])
 
-    def test_purge_results(self):
+    def test_purge_hub_results(self):
         # ensure there are some tasks
         for i in range(5):
             self.client[:].apply_sync(lambda : 1)
         # Wait for the Hub to realise the result is done:
         # This prevents a race condition, where we
         # might purge a result the Hub still thinks is pending.
-        time.sleep(0.1)
+        self._wait_for_idle()
         rc2 = clientmod.Client(profile='iptest')
         hist = self.client.hub_history()
         ahr = rc2.get_result([hist[-1]])
         ahr.wait(10)
-        self.client.purge_results(hist[-1])
+        self.client.purge_hub_results(hist[-1])
         newhist = self.client.hub_history()
         self.assertEqual(len(newhist)+1,len(hist))
         rc2.spin()
         rc2.close()
+
+    def test_purge_local_results(self):
+        # ensure there are some tasks
+        res = []
+        for i in range(5):
+            res.append(self.client[:].apply_async(lambda : 1))
+        self._wait_for_idle()
+        self.client.wait(10) # wait for the results to come back
+        before = len(self.client.results)
+        self.assertEqual(len(self.client.metadata),before)
+        self.client.purge_local_results(res[-1])
+        self.assertEqual(len(self.client.results),before-len(res[-1]), msg="Not removed from results")
+        self.assertEqual(len(self.client.metadata),before-len(res[-1]), msg="Not removed from metadata")
         
-    def test_purge_all_results(self):
-        self.client.purge_results('all')
+    def test_purge_all_hub_results(self):
+        self.client.purge_hub_results('all')
         hist = self.client.hub_history()
         self.assertEqual(len(hist), 0)
+
+    def test_purge_all_local_results(self):
+        self.client.purge_local_results('all')
+        self.assertEqual(len(self.client.results), 0, msg="Results not empty")
+        self.assertEqual(len(self.client.metadata), 0, msg="metadata not empty")
+
+    def test_purge_all_results(self):
+        # ensure there are some tasks
+        for i in range(5):
+            self.client[:].apply_sync(lambda : 1)
+        self.client.wait(10)
+        self._wait_for_idle()
+        self.client.purge_results('all')
+        self.assertEqual(len(self.client.results), 0, msg="Results not empty")
+        self.assertEqual(len(self.client.metadata), 0, msg="metadata not empty")
+        hist = self.client.hub_history()
+        self.assertEqual(len(hist), 0, msg="hub history not empty")
+        
+    def test_purge_everything(self):
+        # ensure there are some tasks
+        for i in range(5):
+            self.client[:].apply_sync(lambda : 1)
+        self.client.wait(10)
+        self._wait_for_idle()
+        self.client.purge_everything()
+        # The client results
+        self.assertEqual(len(self.client.results), 0, msg="Results not empty")
+        self.assertEqual(len(self.client.metadata), 0, msg="metadata not empty")
+        # The client "bookkeeping"
+        self.assertEqual(len(self.client.session.digest_history), 0, msg="session digest not empty")
+        self.assertEqual(len(self.client.history), 0, msg="client history not empty")
+        # the hub results
+        hist = self.client.hub_history()
+        self.assertEqual(len(hist), 0, msg="hub history not empty")
+        
     
     def test_spin_thread(self):
         self.client.spin_thread(0.01)

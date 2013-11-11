@@ -105,7 +105,7 @@ class InputHookManager(object):
     
     def __init__(self):
         if ctypes is None:
-            warn("IPython GUI event loop requires ctypes, %gui will not be available\n")
+            warn("IPython GUI event loop requires ctypes, %gui will not be available")
             return
         self.PYFUNC = ctypes.PYFUNCTYPE(ctypes.c_int)
         self._apps = {}
@@ -320,8 +320,11 @@ class InputHookManager(object):
         """
         self._current_gui = GUI_TK
         if app is None:
-            import Tkinter
-            app = Tkinter.Tk()
+            try:
+                from tkinter import Tk  # Py 3
+            except ImportError:
+                from Tkinter import Tk  # Py 2
+            app = Tk()
             app.withdraw()
             self._apps[GUI_TK] = app
             return app
@@ -417,7 +420,6 @@ class InputHookManager(object):
         IPython.
 
         """
-        import pyglet
         from IPython.lib.inputhookpyglet import inputhook_pyglet
         self.set_inputhook(inputhook_pyglet)
         self._current_gui = GUI_PYGLET
@@ -482,6 +484,19 @@ set_inputhook = inputhook_manager.set_inputhook
 current_gui = inputhook_manager.current_gui
 clear_app_refs = inputhook_manager.clear_app_refs
 
+guis = {None: clear_inputhook,
+        GUI_NONE: clear_inputhook,
+        GUI_OSX: lambda app=False: None,
+        GUI_TK: enable_tk,
+        GUI_GTK: enable_gtk,
+        GUI_WX: enable_wx,
+        GUI_QT: enable_qt4, # qt3 not supported
+        GUI_QT4: enable_qt4,
+        GUI_GLUT: enable_glut,
+        GUI_PYGLET: enable_pyglet,
+        GUI_GTK3: enable_gtk3,
+}
+
 
 # Convenience function to switch amongst them
 def enable_gui(gui=None, app=None):
@@ -500,7 +515,7 @@ def enable_gui(gui=None, app=None):
       For toolkits that have the concept of a global app, you can supply an
       existing one.  If not given, the toolkit will be probed for one, and if
       none is found, a new one will be created.  Note that GTK does not have
-      this concept, and passing an app if `gui`=="GTK" will raise an error.
+      this concept, and passing an app if ``gui=="GTK"`` will raise an error.
 
     Returns
     -------
@@ -508,18 +523,6 @@ def enable_gui(gui=None, app=None):
     PyOS_InputHook wrapper object or the GUI toolkit app created, if there was
     one.
     """
-    guis = {None: clear_inputhook,
-            GUI_NONE: clear_inputhook,
-            GUI_OSX: lambda app=False: None,
-            GUI_TK: enable_tk,
-            GUI_GTK: enable_gtk,
-            GUI_WX: enable_wx,
-            GUI_QT: enable_qt4, # qt3 not supported
-            GUI_QT4: enable_qt4,
-            GUI_GLUT: enable_glut,
-            GUI_PYGLET: enable_pyglet,
-            GUI_GTK3: enable_gtk3,
-            }
     try:
         gui_hook = guis[gui]
     except KeyError:

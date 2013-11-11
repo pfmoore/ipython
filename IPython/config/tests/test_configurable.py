@@ -27,7 +27,7 @@ from IPython.config.configurable import (
 )
 
 from IPython.utils.traitlets import (
-    Integer, Float, Unicode
+    Integer, Float, Unicode, List, Dict, Set,
 )
 
 from IPython.config.loader import Config
@@ -161,7 +161,6 @@ class TestConfigurable(TestCase):
 class TestSingletonConfigurable(TestCase):
 
     def test_instance(self):
-        from IPython.config.configurable import SingletonConfigurable
         class Foo(SingletonConfigurable): pass
         self.assertEqual(Foo.initialized(), False)
         foo = Foo.instance()
@@ -181,3 +180,196 @@ class TestSingletonConfigurable(TestCase):
         self.assertEqual(bam, Bam._instance)
         self.assertEqual(bam, Bar._instance)
         self.assertEqual(SingletonConfigurable._instance, None)
+
+
+class MyParent(Configurable):
+    pass
+
+class MyParent2(MyParent):
+    pass
+
+class TestParentConfigurable(TestCase):
+    
+    def test_parent_config(self):
+        cfg = Config({
+            'MyParent' : {
+                'MyConfigurable' : {
+                    'b' : 2.0,
+                }
+            }
+        })
+        parent = MyParent(config=cfg)
+        myc = MyConfigurable(parent=parent)
+        self.assertEqual(myc.b, parent.config.MyParent.MyConfigurable.b)
+
+    def test_parent_inheritance(self):
+        cfg = Config({
+            'MyParent' : {
+                'MyConfigurable' : {
+                    'b' : 2.0,
+                }
+            }
+        })
+        parent = MyParent2(config=cfg)
+        myc = MyConfigurable(parent=parent)
+        self.assertEqual(myc.b, parent.config.MyParent.MyConfigurable.b)
+
+    def test_multi_parent(self):
+        cfg = Config({
+            'MyParent2' : {
+                'MyParent' : {
+                    'MyConfigurable' : {
+                        'b' : 2.0,
+                    }
+                },
+                # this one shouldn't count
+                'MyConfigurable' : {
+                    'b' : 3.0,
+                },
+            }
+        })
+        parent2 = MyParent2(config=cfg)
+        parent = MyParent(parent=parent2)
+        myc = MyConfigurable(parent=parent)
+        self.assertEqual(myc.b, parent.config.MyParent2.MyParent.MyConfigurable.b)
+
+    def test_parent_priority(self):
+        cfg = Config({
+            'MyConfigurable' : {
+                'b' : 2.0,
+            },
+            'MyParent' : {
+                'MyConfigurable' : {
+                    'b' : 3.0,
+                }
+            },
+            'MyParent2' : {
+                'MyConfigurable' : {
+                    'b' : 4.0,
+                }
+            }
+        })
+        parent = MyParent2(config=cfg)
+        myc = MyConfigurable(parent=parent)
+        self.assertEqual(myc.b, parent.config.MyParent2.MyConfigurable.b)
+
+    def test_multi_parent_priority(self):
+        cfg = Config({
+            'MyConfigurable' : {
+                'b' : 2.0,
+            },
+            'MyParent' : {
+                'MyConfigurable' : {
+                    'b' : 3.0,
+                }
+            },
+            'MyParent2' : {
+                'MyConfigurable' : {
+                    'b' : 4.0,
+                }
+            },
+            'MyParent2' : {
+                'MyParent' : {
+                    'MyConfigurable' : {
+                        'b' : 5.0,
+                    }
+                }
+            }
+        })
+        parent2 = MyParent2(config=cfg)
+        parent = MyParent2(parent=parent2)
+        myc = MyConfigurable(parent=parent)
+        self.assertEqual(myc.b, parent.config.MyParent2.MyParent.MyConfigurable.b)
+
+class Containers(Configurable):
+    lis = List(config=True)
+    def _lis_default(self):
+        return [-1]
+    
+    s = Set(config=True)
+    def _s_default(self):
+        return {'a'}
+    
+    d = Dict(config=True)
+    def _d_default(self):
+        return {'a' : 'b'}
+
+class TestConfigContainers(TestCase):
+    def test_extend(self):
+        c = Config()
+        c.Containers.lis.extend(list(range(5)))
+        obj = Containers(config=c)
+        self.assertEqual(obj.lis, list(range(-1,5)))
+
+    def test_insert(self):
+        c = Config()
+        c.Containers.lis.insert(0, 'a')
+        c.Containers.lis.insert(1, 'b')
+        obj = Containers(config=c)
+        self.assertEqual(obj.lis, ['a', 'b', -1])
+
+    def test_prepend(self):
+        c = Config()
+        c.Containers.lis.prepend([1,2])
+        c.Containers.lis.prepend([2,3])
+        obj = Containers(config=c)
+        self.assertEqual(obj.lis, [2,3,1,2,-1])
+
+    def test_prepend_extend(self):
+        c = Config()
+        c.Containers.lis.prepend([1,2])
+        c.Containers.lis.extend([2,3])
+        obj = Containers(config=c)
+        self.assertEqual(obj.lis, [1,2,-1,2,3])
+
+    def test_append_extend(self):
+        c = Config()
+        c.Containers.lis.append([1,2])
+        c.Containers.lis.extend([2,3])
+        obj = Containers(config=c)
+        self.assertEqual(obj.lis, [-1,[1,2],2,3])
+
+    def test_extend_append(self):
+        c = Config()
+        c.Containers.lis.extend([2,3])
+        c.Containers.lis.append([1,2])
+        obj = Containers(config=c)
+        self.assertEqual(obj.lis, [-1,2,3,[1,2]])
+
+    def test_insert_extend(self):
+        c = Config()
+        c.Containers.lis.insert(0, 1)
+        c.Containers.lis.extend([2,3])
+        obj = Containers(config=c)
+        self.assertEqual(obj.lis, [1,-1,2,3])
+
+    def test_set_update(self):
+        c = Config()
+        c.Containers.s.update({0,1,2})
+        c.Containers.s.update({3})
+        obj = Containers(config=c)
+        self.assertEqual(obj.s, {'a', 0, 1, 2, 3})
+
+    def test_dict_update(self):
+        c = Config()
+        c.Containers.d.update({'c' : 'd'})
+        c.Containers.d.update({'e' : 'f'})
+        obj = Containers(config=c)
+        self.assertEqual(obj.d, {'a':'b', 'c':'d', 'e':'f'})
+    
+    def test_update_twice(self):
+        c = Config()
+        c.MyConfigurable.a = 5
+        m = MyConfigurable(config=c)
+        self.assertEqual(m.a, 5)
+        
+        c2 = Config()
+        c2.MyConfigurable.a = 10
+        m.update_config(c2)
+        self.assertEqual(m.a, 10)
+        
+        c2.MyConfigurable.a = 15
+        m.update_config(c2)
+        self.assertEqual(m.a, 15)
+    
+

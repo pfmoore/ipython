@@ -11,7 +11,7 @@ Authors:
 """
 
 #-----------------------------------------------------------------------------
-#  Copyright (C) 2008-2011  The IPython Development Team
+#  Copyright (C) 2008  The IPython Development Team
 #
 #  Distributed under the terms of the BSD License.  The full license is in
 #  the file COPYING, distributed as part of this software.
@@ -25,7 +25,6 @@ from __future__ import with_statement
 
 import json
 import os
-import socket
 import stat
 import sys
 
@@ -45,36 +44,42 @@ from IPython.parallel.apps.baseapp import (
     catch_config_error,
 )
 from IPython.utils.importstring import import_item
+from IPython.utils.localinterfaces import localhost, public_ips
 from IPython.utils.traitlets import Instance, Unicode, Bool, List, Dict, TraitError
 
-from IPython.zmq.session import (
+from IPython.kernel.zmq.session import (
     Session, session_aliases, session_flags, default_secure
 )
 
 from IPython.parallel.controller.heartmonitor import HeartMonitor
 from IPython.parallel.controller.hub import HubFactory
 from IPython.parallel.controller.scheduler import TaskScheduler,launch_scheduler
-from IPython.parallel.controller.sqlitedb import SQLiteDB
+from IPython.parallel.controller.dictdb import DictDB
 
-from IPython.parallel.util import split_url, disambiguate_url
+from IPython.parallel.util import split_url, disambiguate_url, set_hwm
 
-# conditional import of MongoDB backend class
+# conditional import of SQLiteDB / MongoDB backend class
+real_dbs = []
+
+try:
+    from IPython.parallel.controller.sqlitedb import SQLiteDB
+except ImportError:
+    pass
+else:
+    real_dbs.append(SQLiteDB)
 
 try:
     from IPython.parallel.controller.mongodb import MongoDB
 except ImportError:
-    maybe_mongo = []
+    pass
 else:
-    maybe_mongo = [MongoDB]
+    real_dbs.append(MongoDB)
+
 
 
 #-----------------------------------------------------------------------------
 # Module level variables
 #-----------------------------------------------------------------------------
-
-
-#: The default config file name for this application
-default_config_file_name = u'ipcontroller_config.py'
 
 
 _description = """Start the IPython controller for parallel computing.
@@ -147,8 +152,7 @@ class IPControllerApp(BaseParallelApplication):
     name = u'ipcontroller'
     description = _description
     examples = _examples
-    config_file_name = Unicode(default_config_file_name)
-    classes = [ProfileDir, Session, HubFactory, TaskScheduler, HeartMonitor, SQLiteDB] + maybe_mongo
+    classes = [ProfileDir, Session, HubFactory, TaskScheduler, HeartMonitor, DictDB] + real_dbs
     
     # change default to True
     auto_create = Bool(True, config=True,
@@ -220,13 +224,13 @@ class IPControllerApp(BaseParallelApplication):
         location = cdict['location']
         
         if not location:
-            try:
-                location = socket.gethostbyname_ex(socket.gethostname())[2][-1]
-            except (socket.gaierror, IndexError):
-                self.log.warn("Could not identify this machine's IP, assuming 127.0.0.1."
+            if public_ips():
+                location = public_ips()[-1]
+            else:
+                self.log.warn("Could not identify this machine's IP, assuming %s."
                 " You may need to specify '--location=<external_ip_address>' to help"
-                " IPython decide when to connect via loopback.")
-                location = '127.0.0.1'
+                " IPython decide when to connect via loopback." % localhost() )
+                location = localhost()
             cdict['location'] = location
         fname = os.path.join(self.profile_dir.security_dir, fname)
         self.log.info("writing connection info to %s", fname)
@@ -247,7 +251,7 @@ class IPControllerApp(BaseParallelApplication):
             ecfg = json.loads(f.read())
         
         # json gives unicode, Session.key wants bytes
-        c.Session.key = ecfg['exec_key'].encode('ascii')
+        c.Session.key = ecfg['key'].encode('ascii')
         
         xport,ip = ecfg['interface'].split('://')
         
@@ -265,7 +269,7 @@ class IPControllerApp(BaseParallelApplication):
         with open(fname) as f:
             ccfg = json.loads(f.read())
         
-        for key in ('exec_key', 'registration', 'pack', 'unpack'):
+        for key in ('key', 'registration', 'pack', 'unpack', 'signature_scheme'):
             assert ccfg[key] == ecfg[key], "mismatch between engine and client info: %r" % key
         
         xport,addr = ccfg['interface'].split('://')
@@ -334,10 +338,11 @@ class IPControllerApp(BaseParallelApplication):
             # save to new json config files
             f = self.factory
             base = {
-                'exec_key'  : f.session.key.decode('ascii'),
+                'key'  : f.session.key.decode('ascii'),
                 'location'  : self.location,
                 'pack'      : f.session.packer,
                 'unpack'    : f.session.unpacker,
+                'signature_scheme' : f.session.signature_scheme,
             }
             
             cdict = {'ssh' : self.ssh_server}
@@ -376,6 +381,7 @@ class IPControllerApp(BaseParallelApplication):
 
         # Multiplexer Queue (in a Process)
         q = mq(zmq.ROUTER, zmq.ROUTER, zmq.PUB, b'in', b'out')
+        
         q.bind_in(f.client_url('mux'))
         q.setsockopt_in(zmq.IDENTITY, b'mux_in')
         q.bind_out(f.engine_url('mux'))
@@ -393,9 +399,9 @@ class IPControllerApp(BaseParallelApplication):
         q.connect_mon(monitor_url)
         q.daemon=True
         children.append(q)
-        try:
+        if 'TaskScheduler.scheme_name' in self.config:
             scheme = self.config.TaskScheduler.scheme_name
-        except AttributeError:
+        else:
             scheme = TaskScheduler.scheme_name.get_default_value()
         # Task Queue (in a Process)
         if scheme == 'pure':
@@ -429,6 +435,22 @@ class IPControllerApp(BaseParallelApplication):
                 # single-threaded Controller
                 kwargs['in_thread'] = True
                 launch_scheduler(*sargs, **kwargs)
+        
+        # set unlimited HWM for all relay devices
+        if hasattr(zmq, 'SNDHWM'):
+            q = children[0]
+            q.setsockopt_in(zmq.RCVHWM, 0)
+            q.setsockopt_out(zmq.SNDHWM, 0)
+            
+            for q in children[1:]:
+                if not hasattr(q, 'setsockopt_in'):
+                    continue
+                q.setsockopt_in(zmq.SNDHWM, 0)
+                q.setsockopt_in(zmq.RCVHWM, 0)
+                q.setsockopt_out(zmq.SNDHWM, 0)
+                q.setsockopt_out(zmq.RCVHWM, 0)
+                q.setsockopt_mon(zmq.SNDHWM, 0)
+            
 
     def terminate_children(self):
         child_procs = []
@@ -460,7 +482,7 @@ class IPControllerApp(BaseParallelApplication):
         for s in statements:
             try:
                 self.log.msg("Executing statement: '%s'" % s)
-                exec s in globals(), locals()
+                exec(s, globals(), locals())
             except:
                 self.log.msg("Error running statement: %s" % s)
 
@@ -502,8 +524,7 @@ class IPControllerApp(BaseParallelApplication):
             self.cleanup_connection_files()
             
 
-
-def launch_new_instance():
+def launch_new_instance(*args, **kwargs):
     """Create and run the IPython controller"""
     if sys.platform == 'win32':
         # make sure we don't get called from a multiprocessing subprocess
@@ -519,9 +540,7 @@ def launch_new_instance():
         if p.name != 'MainProcess':
             # we are a subprocess, don't start another Controller!
             return
-    app = IPControllerApp.instance()
-    app.initialize()
-    app.start()
+    return IPControllerApp.launch_instance(*args, **kwargs)
 
 
 if __name__ == '__main__':

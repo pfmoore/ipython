@@ -20,15 +20,17 @@ from __future__ import print_function
 #-------------------------------------------------------------------------------
 # Imports
 #-------------------------------------------------------------------------------
+import errno
 import os
 import sys
 
-try:
-    from configparser import ConfigParser
-except:
-    from ConfigParser import ConfigParser
 from distutils.command.build_py import build_py
+from distutils.command.build_scripts import build_scripts
+from distutils.command.install import install
+from distutils.command.install_scripts import install_scripts
+from distutils.cmd import Command
 from glob import glob
+from subprocess import call
 
 from setupext import install_data_ext
 
@@ -39,6 +41,7 @@ from setupext import install_data_ext
 # A few handy globals
 isfile = os.path.isfile
 pjoin = os.path.join
+repo_root = os.path.dirname(os.path.abspath(__file__))
 
 def oscmd(s):
     print(">", s)
@@ -71,7 +74,7 @@ def file_doesnt_endwith(test,endings):
 #---------------------------------------------------------------------------
 
 # release.py contains version, authors, license, url, keywords, etc.
-execfile(pjoin('IPython','core','release.py'), globals())
+execfile(pjoin(repo_root, 'IPython','core','release.py'), globals())
 
 # Create a dict with the basic information
 # This dict is eventually passed to setup after additional keys are added.
@@ -132,9 +135,8 @@ def find_package_data():
     
     # walk notebook resources:
     cwd = os.getcwd()
-    os.chdir(os.path.join('IPython', 'frontend', 'html', 'notebook'))
+    os.chdir(os.path.join('IPython', 'html'))
     static_walk = list(os.walk('static'))
-    os.chdir(cwd)
     static_data = []
     for parent, dirs, files in static_walk:
         if parent.startswith(excludes):
@@ -142,12 +144,23 @@ def find_package_data():
         for f in files:
             static_data.append(os.path.join(parent, f))
 
+    os.chdir(os.path.join('tests',))
+    js_tests = glob('casperjs/*.*') +  glob('casperjs/*/*')
+    os.chdir(cwd)
+
     package_data = {
         'IPython.config.profile' : ['README*', '*/*.py'],
+        'IPython.core.tests' : ['*.png', '*.jpg'],
         'IPython.testing' : ['*.txt'],
         'IPython.testing.plugin' : ['*.txt'],
-        'IPython.frontend.html.notebook' : ['templates/*'] + static_data,
-        'IPython.frontend.qt.console' : ['resources/icon/*.svg'],
+        'IPython.html' : ['templates/*'] + static_data,
+        'IPython.html.tests' : js_tests,
+        'IPython.qt.console' : ['resources/icon/*.svg'],
+        'IPython.nbconvert' : ['templates/*.tpl', 'templates/latex/*.tplx',
+            'templates/latex/skeleton/*.tplx', 'templates/skeleton/*', 
+            'templates/reveal_internals/*.tpl', 'tests/files/*.*',
+            'exporters/tests/files/*.*'],
+        'IPython.nbformat' : ['tests/*.ipynb']
     }
     return package_data
 
@@ -297,7 +310,7 @@ def target_update(target,deps,cmd):
 # Find scripts
 #---------------------------------------------------------------------------
 
-def find_scripts(entry_points=False, suffix=''):
+def find_entry_points():
     """Find IPython's scripts.
 
     if entry_points is True:
@@ -308,33 +321,94 @@ def find_scripts(entry_points=False, suffix=''):
     suffix is appended to script names if entry_points is True, so that the
     Python 3 scripts get named "ipython3" etc.
     """
-    if entry_points:
-        console_scripts = [s % suffix for s in [
-            'ipython%s = IPython.frontend.terminal.ipapp:launch_new_instance',
-            'pycolor%s = IPython.utils.PyColorize:main',
+    ep = [
+            'ipython%s = IPython:start_ipython',
             'ipcontroller%s = IPython.parallel.apps.ipcontrollerapp:launch_new_instance',
             'ipengine%s = IPython.parallel.apps.ipengineapp:launch_new_instance',
             'iplogger%s = IPython.parallel.apps.iploggerapp:launch_new_instance',
             'ipcluster%s = IPython.parallel.apps.ipclusterapp:launch_new_instance',
-            'iptest%s = IPython.testing.iptest:main',
-            'irunner%s = IPython.lib.irunner:main'
-        ]]
-        gui_scripts = []
-        scripts = dict(console_scripts=console_scripts, gui_scripts=gui_scripts)
-    else:
-        parallel_scripts = pjoin('IPython','parallel','scripts')
-        main_scripts = pjoin('IPython','scripts')
-        scripts = [
-                   pjoin(parallel_scripts, 'ipengine'),
-                   pjoin(parallel_scripts, 'ipcontroller'),
-                   pjoin(parallel_scripts, 'ipcluster'),
-                   pjoin(parallel_scripts, 'iplogger'),
-                   pjoin(main_scripts, 'ipython'),
-                   pjoin(main_scripts, 'pycolor'),
-                   pjoin(main_scripts, 'irunner'),
-                   pjoin(main_scripts, 'iptest')
+            'iptest%s = IPython.testing.iptestcontroller:main',
+            'irunner%s = IPython.lib.irunner:main',
         ]
-    return scripts
+    suffix = str(sys.version_info[0])
+    return [e % '' for e in ep] + [e % suffix for e in ep]
+
+script_src = """#!{executable}
+# This script was automatically generated by setup.py
+from {mod} import {func}
+{func}()
+"""
+
+class build_scripts_entrypt(build_scripts):
+    def run(self):
+        self.mkpath(self.build_dir)
+        outfiles = []
+        for script in find_entry_points():
+            name, entrypt = script.split('=')
+            name = name.strip()
+            entrypt = entrypt.strip()
+            outfile = os.path.join(self.build_dir, name)
+            outfiles.append(outfile)
+            print('Writing script to', outfile)
+
+            mod, func = entrypt.split(':')
+            with open(outfile, 'w') as f:
+                f.write(script_src.format(executable=sys.executable,
+                                          mod=mod, func=func))
+
+        return outfiles, outfiles
+
+class install_lib_symlink(Command):
+    user_options = [
+        ('install-dir=', 'd', "directory to install to"),
+        ]
+
+    def initialize_options(self):
+        self.install_dir = None
+
+    def finalize_options(self):
+        self.set_undefined_options('symlink',
+                                   ('install_lib', 'install_dir'),
+                                  )
+
+    def run(self):
+        if sys.platform == 'win32':
+            raise Exception("This doesn't work on Windows.")
+        pkg = os.path.join(os.getcwd(), 'IPython')
+        dest = os.path.join(self.install_dir, 'IPython')
+        print('symlinking %s -> %s' % (pkg, dest))
+        try:
+            os.symlink(pkg, dest)
+        except OSError as e:
+            if e.errno == errno.EEXIST:
+                print('ALREADY EXISTS')
+            else:
+                raise
+
+class install_symlinked(install):
+    def run(self):
+        if sys.platform == 'win32':
+            raise Exception("This doesn't work on Windows.")
+        install.run(self)
+    
+    # 'sub_commands': a list of commands this command might have to run to
+    # get its work done.  See cmd.py for more info.
+    sub_commands = [('install_lib_symlink', lambda self:True),
+                    ('install_scripts_sym', lambda self:True),
+                   ]
+
+class install_scripts_for_symlink(install_scripts):
+    """Redefined to get options from 'symlink' instead of 'install'.
+    
+    I love distutils almost as much as I love setuptools.
+    """
+    def finalize_options(self):
+        self.set_undefined_options('build', ('build_scripts', 'build_dir'))
+        self.set_undefined_options('symlink',
+                                   ('install_scripts', 'install_dir'),
+                                   ('force', 'force'),
+                                   ('skip_build', 'skip_build'),
+                                  )
 
 #---------------------------------------------------------------------------
 # Verify all dependencies
@@ -349,7 +423,8 @@ def check_for_dependencies():
         print_line, print_raw, print_status,
         check_for_sphinx, check_for_pygments,
         check_for_nose, check_for_pexpect,
-        check_for_pyzmq, check_for_readline
+        check_for_pyzmq, check_for_readline,
+        check_for_jinja2, check_for_tornado
     )
     print_line()
     print_raw("BUILDING IPYTHON")
@@ -366,14 +441,53 @@ def check_for_dependencies():
     check_for_nose()
     check_for_pexpect()
     check_for_pyzmq()
+    check_for_tornado()
     check_for_readline()
+    check_for_jinja2()
 
-def record_commit_info(pkg_dir, build_cmd=build_py):
-    """ Return extended build or sdist command class for recording commit
+#---------------------------------------------------------------------------
+# VCS related
+#---------------------------------------------------------------------------
+
+# utils.submodule has checks for submodule status
+execfile(pjoin('IPython','utils','submodule.py'), globals())
+
+class UpdateSubmodules(Command):
+    """Update git submodules
+    
+    IPython's external javascript dependencies live in a separate repo.
+    """
+    description = "Update git submodules"
+    user_options = []
+    
+    def initialize_options(self):
+        pass
+    
+    def finalize_options(self):
+        pass
+    
+    def run(self):
+        failure = False
+        try:
+            self.spawn('git submodule init'.split())
+            self.spawn('git submodule update --recursive'.split())
+        except Exception as e:
+            failure = e
+            print(e)
+        
+        if not check_submodule_status(repo_root) == 'clean':
+            print("submodules could not be checked out")
+            sys.exit(1)
+
+
+def git_prebuild(pkg_dir, build_cmd=build_py):
+    """Return extended build or sdist command class for recording commit
     
     records git commit in IPython.utils._sysinfo.commit
     
     for use in IPython.utils.sysinfo.sys_info() calls after installation.
+    
+    Also ensures that submodules exist prior to running
     """
     
     class MyBuildPy(build_cmd):
@@ -415,4 +529,60 @@ def record_commit_info(pkg_dir, build_cmd=build_py):
                     '# GENERATED BY setup.py\n',
                     'commit = "%s"\n' % repo_commit,
                 ])
-    return MyBuildPy
+    return require_submodules(MyBuildPy)
+
+
+def require_submodules(command):
+    """decorator for instructing a command to check for submodules before running"""
+    class DecoratedCommand(command):
+        def run(self):
+            if not check_submodule_status(repo_root) == 'clean':
+                print("submodules missing! Run `setup.py submodule` and try again")
+                sys.exit(1)
+            command.run(self)
+    return DecoratedCommand
+
+#---------------------------------------------------------------------------
+# Notebook related
+#---------------------------------------------------------------------------
+
+class CompileCSS(Command):
+    """Recompile Notebook CSS
+    
+    Regenerate the compiled CSS from LESS sources.
+    
+    Requires various dev dependencies, such as fabric and lessc.
+    """
+    description = "Recompile Notebook CSS"
+    user_options = []
+    
+    def initialize_options(self):
+        pass
+    
+    def finalize_options(self):
+        pass
+    
+    def run(self):
+        call("fab css", shell=True, cwd=pjoin(repo_root, "IPython", "html"))
+
+class JavascriptVersion(Command):
+    """write the javascript version to notebook javascript"""
+    description = "Write IPython version to javascript"
+    user_options = []
+    
+    def initialize_options(self):
+        pass
+    
+    def finalize_options(self):
+        pass
+    
+    def run(self):
+        nsfile = pjoin(repo_root, "IPython", "html", "static", "base", "js", "namespace.js")
+        with open(nsfile) as f:
+            lines = f.readlines()
+        with open(nsfile, 'w') as f:
+            for line in lines:
+                if line.startswith("IPython.version"):
+                    line = 'IPython.version = "{0}";\n'.format(version)
+                f.write(line)
+            

@@ -23,14 +23,13 @@ Authors:
 #-----------------------------------------------------------------------------
 from __future__ import print_function
 
-import __builtin__
-
 import sys
 
 
 from IPython.config.configurable import Configurable
 from IPython.utils import io
-from IPython.utils.traitlets import Instance, List
+from IPython.utils.py3compat import builtin_mod
+from IPython.utils.traitlets import Instance
 from IPython.utils.warn import warn
 
 #-----------------------------------------------------------------------------
@@ -50,8 +49,8 @@ class DisplayHook(Configurable):
 
     shell = Instance('IPython.core.interactiveshell.InteractiveShellABC')
 
-    def __init__(self, shell=None, cache_size=1000, config=None):
-        super(DisplayHook, self).__init__(shell=shell, config=config)
+    def __init__(self, shell=None, cache_size=1000, **kwargs):
+        super(DisplayHook, self).__init__(shell=shell, **kwargs)
 
         cache_size_min = 3
         if cache_size <= 0:
@@ -90,7 +89,7 @@ class DisplayHook(Configurable):
         # If something injected a '_' variable in __builtin__, delete
         # ipython's automatic one so we don't clobber that.  gettext() in
         # particular uses _, so we need to stay away from it.
-        if '_' in __builtin__.__dict__:
+        if '_' in builtin_mod.__dict__:
             try:
                 del self.shell.user_ns['_']
             except KeyError:
@@ -145,15 +144,18 @@ class DisplayHook(Configurable):
 
         Returns
         -------
-        format_data : dict
-            A :class:`dict` whose keys are valid MIME types and values are
+        (format_dict, md_dict) : dict
+            format_dict is a :class:`dict` whose keys are valid MIME types and values are
             JSON'able raw data for that MIME type. It is recommended that
             all return values of this should always include the "text/plain"
             MIME type representation of the object.
+            md_dict is a :class:`dict` with the same MIME type keys
+            of metadata associated with each output.
+            
         """
         return self.shell.display_formatter.format(result)
 
-    def write_format_data(self, format_dict):
+    def write_format_data(self, format_dict, md_dict=None):
         """Write the format data dict to the frontend.
 
         This default version of this method simply writes the plain text
@@ -165,6 +167,8 @@ class DisplayHook(Configurable):
         ----------
         format_dict : dict
             The format dict for the object passed to `sys.displayhook`.
+        md_dict : dict (optional)
+            The metadata dict to be associated with the display data.
         """
         # We want to print because we want to always make sure we have a
         # newline, even if all the prompt separators are ''. This is the
@@ -201,7 +205,7 @@ class DisplayHook(Configurable):
             # Don't overwrite '_' and friends if '_' is in __builtin__ (otherwise
             # we cause buggy behavior for things like gettext).
 
-            if '_' not in __builtin__.__dict__:
+            if '_' not in builtin_mod.__dict__:
                 self.___ = self.__
                 self.__ = self._
                 self._ = result
@@ -239,8 +243,8 @@ class DisplayHook(Configurable):
         if result is not None and not self.quiet():
             self.start_displayhook()
             self.write_output_prompt()
-            format_dict = self.compute_format_data(result)
-            self.write_format_data(format_dict)
+            format_dict, md_dict = self.compute_format_data(result)
+            self.write_format_data(format_dict, md_dict)
             self.update_user_ns(result)
             self.log_output(format_dict)
             self.finish_displayhook()
@@ -265,7 +269,7 @@ class DisplayHook(Configurable):
         # Release our own references to objects:
         self._, self.__, self.___ = '', '', ''
 
-        if '_' not in __builtin__.__dict__:
+        if '_' not in builtin_mod.__dict__:
             self.shell.user_ns.update({'_':None,'__':None, '___':None})
         import gc
         # TODO: Is this really needed?

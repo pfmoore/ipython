@@ -12,13 +12,14 @@ This script is meant to be called by other parts of the test suite that call it
 via %run as if it were executed interactively by the user. As of 2011-05-29,
 test_run.py calls it.
 """
+from __future__ import print_function
 
 #-----------------------------------------------------------------------------
 # Module imports
 #-----------------------------------------------------------------------------
 import sys
 
-from IPython.core import ipapi
+from IPython import get_ipython
 
 #-----------------------------------------------------------------------------
 # Globals
@@ -29,7 +30,7 @@ from IPython.core import ipapi
 # want to prevent.
 if __name__ == '__main__':
 
-    ip = ipapi.get()
+    ip = get_ipython()
 
     if not '_refbug_cache' in ip.user_ns:
         ip.user_ns['_refbug_cache'] = []
@@ -44,4 +45,4 @@ if __name__ == '__main__':
 
     def call_f():
         for func in cache:
-            print 'lowercased:',func().lower()
+            print('lowercased:',func().lower())

@@ -17,9 +17,8 @@ Authors:  Robin Dunn, Brian Granger, Ondrej Certik
 # Imports
 #-----------------------------------------------------------------------------
 
-import os
-import signal
 import sys
+import signal
 import time
 from timeit import default_timer as clock
 import wx
@@ -143,10 +142,7 @@ def inputhook_wx3():
                 # 0.01    1.5%
                 # 0.05    0.5%
                 used_time = clock() - t
-                if used_time > 5*60.0:
-                    # print 'Sleep for 5 s'  # dbg
-                    time.sleep(5.0)
-                elif used_time > 10.0:
+                if used_time > 10.0:
                     # print 'Sleep for 1 s'  # dbg
                     time.sleep(1.0)
                 elif used_time > 0.1:
@@ -161,5 +157,11 @@ def inputhook_wx3():
         pass
     return 0
 
-# This is our default implementation
-inputhook_wx = inputhook_wx3
+if sys.platform == 'darwin':
+    # On OSX, evtloop.Pending() always returns True, regardless of there being
+    # any events pending. As such we can't use implementations 1 or 3 of the
+    # inputhook as those depend on a pending/dispatch loop.
+    inputhook_wx = inputhook_wx2
+else:
+    # This is our default implementation
+    inputhook_wx = inputhook_wx3

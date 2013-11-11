@@ -7,10 +7,8 @@
 
 # stdlib
 import os
-import shutil
 import sys
 import tempfile
-import unittest
 from datetime import datetime
 
 # third party
@@ -45,9 +43,9 @@ def test_history():
             
             # Detailed tests for _get_range_session
             grs = ip.history_manager._get_range_session
-            nt.assert_equal(list(grs(start=2,stop=-1)), zip([0], [2], hist[1:-1]))
-            nt.assert_equal(list(grs(start=-2)), zip([0,0], [2,3], hist[-2:]))
-            nt.assert_equal(list(grs(output=True)), zip([0,0,0], [1,2,3], zip(hist, [None,None,'spam'])))
+            nt.assert_equal(list(grs(start=2,stop=-1)), list(zip([0], [2], hist[1:-1])))
+            nt.assert_equal(list(grs(start=-2)), list(zip([0,0], [2,3], hist[-2:])))
+            nt.assert_equal(list(grs(output=True)), list(zip([0,0,0], [1,2,3], zip(hist, [None,None,'spam']))))
 
             # Check whether specifying a range beyond the end of the current
             # session results in an error (gh-804)
@@ -61,44 +59,65 @@ def test_history():
 
             # New session
             ip.history_manager.reset()
-            newcmds = ["z=5","class X(object):\n    pass", "k='p'"]
+            newcmds = [u"z=5",
+                       u"class X(object):\n    pass",
+                       u"k='p'",
+                       u"z=5"]
             for i, cmd in enumerate(newcmds, start=1):
                 ip.history_manager.store_inputs(i, cmd)
             gothist = ip.history_manager.get_range(start=1, stop=4)
-            nt.assert_equal(list(gothist), zip([0,0,0],[1,2,3], newcmds))
+            nt.assert_equal(list(gothist), list(zip([0,0,0],[1,2,3], newcmds)))
             # Previous session:
             gothist = ip.history_manager.get_range(-1, 1, 4)
-            nt.assert_equal(list(gothist), zip([1,1,1],[1,2,3], hist))
+            nt.assert_equal(list(gothist), list(zip([1,1,1],[1,2,3], hist)))
+
+            newhist = [(2, i, c) for (i, c) in enumerate(newcmds, 1)]
 
             # Check get_hist_tail
-            gothist = ip.history_manager.get_tail(4, output=True,
+            gothist = ip.history_manager.get_tail(5, output=True,
                                                     include_latest=True)
-            expected = [(1, 3, (hist[-1], "spam")),
-                        (2, 1, (newcmds[0], None)),
-                        (2, 2, (newcmds[1], None)),
-                        (2, 3, (newcmds[2], None)),]
+            expected = [(1, 3, (hist[-1], "spam"))] \
+                + [(s, n, (c, None)) for (s, n, c) in newhist]
             nt.assert_equal(list(gothist), expected)
 
             gothist = ip.history_manager.get_tail(2)
-            expected = [(2, 1, newcmds[0]),
-                        (2, 2, newcmds[1])]
+            expected = newhist[-3:-1]
             nt.assert_equal(list(gothist), expected)
 
             # Check get_hist_search
             gothist = ip.history_manager.search("*test*")
             nt.assert_equal(list(gothist), [(1,2,hist[1])] )
+
             gothist = ip.history_manager.search("*=*")
             nt.assert_equal(list(gothist),
                             [(1, 1, hist[0]),
                              (1, 2, hist[1]),
                              (1, 3, hist[2]),
-                             (2, 1, newcmds[0]),
-                             (2, 3, newcmds[2])])
-            gothist = ip.history_manager.search("*=*", n=3)
+                             newhist[0],
+                             newhist[2],
+                             newhist[3]])
+
+            gothist = ip.history_manager.search("*=*", n=4)
             nt.assert_equal(list(gothist),
                             [(1, 3, hist[2]),
-                             (2, 1, newcmds[0]),
-                             (2, 3, newcmds[2])])
+                             newhist[0],
+                             newhist[2],
+                             newhist[3]])
+
+            gothist = ip.history_manager.search("*=*", unique=True)
+            nt.assert_equal(list(gothist),
+                            [(1, 1, hist[0]),
+                             (1, 2, hist[1]),
+                             (1, 3, hist[2]),
+                             newhist[2],
+                             newhist[3]])
+
+            gothist = ip.history_manager.search("*=*", unique=True, n=3)
+            nt.assert_equal(list(gothist),
+                            [(1, 3, hist[2]),
+                             newhist[2],
+                             newhist[3]])
+
             gothist = ip.history_manager.search("b*", output=True)
             nt.assert_equal(list(gothist), [(1,3,(hist[2],"spam"))] )
 
@@ -120,14 +139,15 @@ def test_history():
 
 
 def test_extract_hist_ranges():
-    instr = "1 2/3 ~4/5-6 ~4/7-~4/9 ~9/2-~7/5"
+    instr = "1 2/3 ~4/5-6 ~4/7-~4/9 ~9/2-~7/5 ~10/"
     expected = [(0, 1, 2),  # 0 == current session
                 (2, 3, 4),
                 (-4, 5, 7),
                 (-4, 7, 10),
                 (-9, 2, None),  # None == to end
                 (-8, 1, None),
-                (-7, 1, 6)]
+                (-7, 1, 6),
+                (-10, 1, None)]
     actual = list(extract_hist_ranges(instr))
     nt.assert_equal(actual, expected)
 

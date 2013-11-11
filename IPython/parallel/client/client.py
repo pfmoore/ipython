@@ -4,6 +4,7 @@ Authors:
 
 * MinRK
 """
+from __future__ import print_function
 #-----------------------------------------------------------------------------
 #  Copyright (C) 2010-2011  The IPython Development Team
 #
@@ -34,11 +35,12 @@ from IPython.config.configurable import MultipleInstanceError
 from IPython.core.application import BaseIPythonApplication
 from IPython.core.profiledir import ProfileDir, ProfileDirError
 
+from IPython.utils.capture import RichOutput
 from IPython.utils.coloransi import TermColors
-from IPython.utils.jsonutil import rekey
-from IPython.utils.localinterfaces import LOCAL_IPS
+from IPython.utils.jsonutil import rekey, extract_dates, parse_date
+from IPython.utils.localinterfaces import localhost, is_local_ip
 from IPython.utils.path import get_ipython_dir
-from IPython.utils.py3compat import cast_bytes
+from IPython.utils.py3compat import cast_bytes, string_types, xrange, iteritems
 from IPython.utils.traitlets import (HasTraits, Integer, Instance, Unicode,
                                     Dict, List, Bool, Set, Any)
 from IPython.external.decorator import decorator
@@ -48,16 +50,11 @@ from IPython.parallel import Reference
 from IPython.parallel import error
 from IPython.parallel import util
 
-from IPython.zmq.session import Session, Message
-from IPython.zmq import serialize
+from IPython.kernel.zmq.session import Session, Message
+from IPython.kernel.zmq import serialize
 
 from .asyncresult import AsyncResult, AsyncHubResult
 from .view import DirectView, LoadBalancedView
-
-if sys.version_info[0] >= 3:
-    # xrange is used in a couple 'isinstance' tests in py2
-    # should be just 'range' in 3k
-    xrange = range
 
 #--------------------------------------------------------------------------
 # Decorators for Client methods
@@ -75,13 +72,46 @@ def spin_first(f, self, *args, **kwargs):
 #--------------------------------------------------------------------------
 
 
-class ExecuteReply(object):
+class ExecuteReply(RichOutput):
     """wrapper for finished Execute results"""
     def __init__(self, msg_id, content, metadata):
         self.msg_id = msg_id
         self._content = content
         self.execution_count = content['execution_count']
         self.metadata = metadata
+    
+    # RichOutput overrides
+    
+    @property
+    def source(self):
+        pyout = self.metadata['pyout']
+        if pyout:
+            return pyout.get('source', '')
+    
+    @property
+    def data(self):
+        pyout = self.metadata['pyout']
+        if pyout:
+            return pyout.get('data', {})
+    
+    @property
+    def _metadata(self):
+        pyout = self.metadata['pyout']
+        if pyout:
+            return pyout.get('metadata', {})
+    
+    def display(self):
+        from IPython.display import publish_display_data
+        publish_display_data(self.source, self.data, self.metadata)
+    
+    def _repr_mime_(self, mime):
+        if mime not in self.data:
+            return
+        data = self.data[mime]
+        if mime in self._metadata:
+            return data, self._metadata[mime]
+        else:
+            return data
     
     def __getitem__(self, key):
         return self.metadata[key]
@@ -128,34 +158,6 @@ class ExecuteReply(object):
                 self.metadata['engine_id'], self.execution_count
             ) + normal + text_out
         )
-    
-    def _repr_html_(self):
-        pyout = self.metadata['pyout'] or {'data':{}}
-        return pyout['data'].get("text/html")
-    
-    def _repr_latex_(self):
-        pyout = self.metadata['pyout'] or {'data':{}}
-        return pyout['data'].get("text/latex")
-    
-    def _repr_json_(self):
-        pyout = self.metadata['pyout'] or {'data':{}}
-        return pyout['data'].get("application/json")
-    
-    def _repr_javascript_(self):
-        pyout = self.metadata['pyout'] or {'data':{}}
-        return pyout['data'].get("application/javascript")
-    
-    def _repr_png_(self):
-        pyout = self.metadata['pyout'] or {'data':{}}
-        return pyout['data'].get("image/png")
-    
-    def _repr_jpeg_(self):
-        pyout = self.metadata['pyout'] or {'data':{}}
-        return pyout['data'].get("image/jpeg")
-    
-    def _repr_svg_(self):
-        pyout = self.metadata['pyout'] or {'data':{}}
-        return pyout['data'].get("image/svg+xml")
 
 
 class Metadata(dict):
@@ -193,21 +195,21 @@ class Metadata(dict):
 
     def __getattr__(self, key):
         """getattr aliased to getitem"""
-        if key in self.iterkeys():
+        if key in self:
             return self[key]
         else:
             raise AttributeError(key)
 
     def __setattr__(self, key, value):
         """setattr aliased to setitem, with strict"""
-        if key in self.iterkeys():
+        if key in self:
             self[key] = value
         else:
             raise AttributeError(key)
 
     def __setitem__(self, key, value):
         """strict static key enforcement"""
-        if key in self.iterkeys():
+        if key in self:
             dict.__setitem__(self, key, value)
         else:
             raise KeyError(key)
@@ -427,13 +429,13 @@ class Client(HasTraits):
         
         url = cfg['registration']
         
-        if location is not None and addr == '127.0.0.1':
+        if location is not None and addr == localhost():
             # location specified, and connection is expected to be local
-            if location not in LOCAL_IPS and not sshserver:
+            if not is_local_ip(location) and not sshserver:
                 # load ssh from JSON *only* if the controller is not on
                 # this machine
                 sshserver=cfg['ssh']
-            if location not in LOCAL_IPS and not sshserver:
+            if not is_local_ip(location) and not sshserver:
                 # warn if no ssh specified, but SSH is probably needed
                 # This is only a warning, because the most likely cause
                 # is a local Controller on a laptop whose IP is dynamic
@@ -460,9 +462,17 @@ class Client(HasTraits):
         ssh_kwargs = dict(keyfile=sshkey, password=password, paramiko=paramiko)
 
         # configure and construct the session
-        extra_args['packer'] = cfg['pack']
-        extra_args['unpacker'] = cfg['unpack']
-        extra_args['key'] = cast_bytes(cfg['exec_key'])
+        try:
+            extra_args['packer'] = cfg['pack']
+            extra_args['unpacker'] = cfg['unpack']
+            extra_args['key'] = cast_bytes(cfg['key'])
+            extra_args['signature_scheme'] = cfg['signature_scheme']
+        except KeyError as exc:
+            msg = '\n'.join([
+                "Connection file is invalid (missing '{}'), possibly from an old version of IPython.",
+                "If you are reusing connection files, remove them and start ipcontroller again."
+            ])
+            raise ValueError(msg.format(exc.message))
         
         self.session = Session(**extra_args)
 
@@ -481,7 +491,12 @@ class Client(HasTraits):
                                     }
         self._queue_handlers = {'execute_reply' : self._handle_execute_reply,
                                 'apply_reply' : self._handle_apply_reply}
-        self._connect(sshserver, ssh_kwargs, timeout)
+        
+        try:
+            self._connect(sshserver, ssh_kwargs, timeout)
+        except:
+            self.close(linger=0)
+            raise
         
         # last step: setup magics, if we are in IPython:
         
@@ -519,13 +534,13 @@ class Client(HasTraits):
 
     def _update_engines(self, engines):
         """Update our engines dict and _ids from a dict of the form: {id:uuid}."""
-        for k,v in engines.iteritems():
+        for k,v in iteritems(engines):
             eid = int(k)
             if eid not in self._engines:
                 self._ids.append(eid)
             self._engines[eid] = v
         self._ids = sorted(self._ids)
-        if sorted(self._engines.keys()) != range(len(self._engines)) and \
+        if sorted(self._engines.keys()) != list(range(len(self._engines))) and \
                         self._task_scheme == 'pure' and self._task_socket:
             self._stop_scheduling_tasks()
 
@@ -553,7 +568,7 @@ class Client(HasTraits):
 
         if targets is None:
             targets = self._ids
-        elif isinstance(targets, basestring):
+        elif isinstance(targets, string_types):
             if targets.lower() == 'all':
                 targets = self._ids
             else:
@@ -566,7 +581,7 @@ class Client(HasTraits):
             targets = [targets]
 
         if isinstance(targets, slice):
-            indices = range(len(self._ids))[targets]
+            indices = list(range(len(self._ids))[targets])
             ids = self.ids
             targets = [ ids[i] for i in indices ]
 
@@ -585,7 +600,6 @@ class Client(HasTraits):
         self._connected=True
 
         def connect_socket(s, url):
-            # url = util.disambiguate_url(url, self._config['location'])
             if self._ssh:
                 return tunnel.tunnel_connection(s, url, sshserver, **ssh_kwargs)
             else:
@@ -661,7 +675,7 @@ class Client(HasTraits):
         if 'date' in parent:
             md['submitted'] = parent['date']
         if 'started' in msg_meta:
-            md['started'] = msg_meta['started']
+            md['started'] = parse_date(msg_meta['started'])
         if 'date' in header:
             md['completed'] = header['date']
         return md
@@ -720,9 +734,9 @@ class Client(HasTraits):
         msg_id = parent['msg_id']
         if msg_id not in self.outstanding:
             if msg_id in self.history:
-                print ("got stale result: %s"%msg_id)
+                print("got stale result: %s"%msg_id)
             else:
-                print ("got unknown result: %s"%msg_id)
+                print("got unknown result: %s"%msg_id)
         else:
             self.outstanding.remove(msg_id)
 
@@ -756,11 +770,11 @@ class Client(HasTraits):
         msg_id = parent['msg_id']
         if msg_id not in self.outstanding:
             if msg_id in self.history:
-                print ("got stale result: %s"%msg_id)
-                print self.results[msg_id]
-                print msg
+                print("got stale result: %s"%msg_id)
+                print(self.results[msg_id])
+                print(msg)
             else:
-                print ("got unknown result: %s"%msg_id)
+                print("got unknown result: %s"%msg_id)
         else:
             self.outstanding.remove(msg_id)
         content = msg['content']
@@ -797,7 +811,7 @@ class Client(HasTraits):
             msg_type = msg['header']['msg_type']
             handler = self._notification_handlers.get(msg_type, None)
             if handler is None:
-                raise Exception("Unhandled message type: %s"%msg.msg_type)
+                raise Exception("Unhandled message type: %s" % msg_type)
             else:
                 handler(msg)
             idents,msg = self.session.recv(self._notification_socket, mode=zmq.NOBLOCK)
@@ -811,7 +825,7 @@ class Client(HasTraits):
             msg_type = msg['header']['msg_type']
             handler = self._queue_handlers.get(msg_type, None)
             if handler is None:
-                raise Exception("Unhandled message type: %s"%msg.msg_type)
+                raise Exception("Unhandled message type: %s" % msg_type)
             else:
                 handler(msg)
             idents,msg = self.session.recv(sock, mode=zmq.NOBLOCK)
@@ -853,6 +867,7 @@ class Client(HasTraits):
             # ignore IOPub messages with no parent.
             # Caused by print statements or warnings from before the first execution.
             if not parent:
+                idents,msg = self.session.recv(sock, mode=zmq.NOBLOCK)
                 continue
             msg_id = parent['msg_id']
             content = msg['content']
@@ -941,14 +956,23 @@ class Client(HasTraits):
         view.activate(suffix)
         return view
 
-    def close(self):
+    def close(self, linger=None):
+        """Close my zmq Sockets
+        
+        If `linger`, set the zmq LINGER socket option,
+        which allows discarding of messages.
+        """
         if self._closed:
             return
         self.stop_spin_thread()
-        snames = filter(lambda n: n.endswith('socket'), dir(self))
-        for socket in map(lambda name: getattr(self, name), snames):
-            if isinstance(socket, zmq.Socket) and not socket.closed:
-                socket.close()
+        snames = [ trait for trait in self.trait_names() if trait.endswith("socket") ]
+        for name in snames:
+            socket = getattr(self, name)
+            if socket is not None and not socket.closed:
+                if linger is not None:
+                    socket.close(linger=linger)
+                else:
+                    socket.close()
         self._closed = True
 
     def _spin_every(self, interval=1):
@@ -1038,7 +1062,7 @@ class Client(HasTraits):
         if jobs is None:
             theids = self.outstanding
         else:
-            if isinstance(jobs, (int, basestring, AsyncResult)):
+            if isinstance(jobs, string_types + (int, AsyncResult)):
                 jobs = [jobs]
             theids = set()
             for job in jobs:
@@ -1046,7 +1070,7 @@ class Client(HasTraits):
                     # index access
                     job = self.history[job]
                 elif isinstance(job, AsyncResult):
-                    map(theids.add, job.msg_ids)
+                    theids.update(job.msg_ids)
                     continue
                 theids.add(job)
         if not theids.intersection(self.outstanding):
@@ -1106,9 +1130,9 @@ class Client(HasTraits):
         targets = self._build_targets(targets)[0]
         
         msg_ids = []
-        if isinstance(jobs, (basestring,AsyncResult)):
+        if isinstance(jobs, string_types + (AsyncResult,)):
             jobs = [jobs]
-        bad_ids = filter(lambda obj: not isinstance(obj, (basestring, AsyncResult)), jobs)
+        bad_ids = [obj for obj in jobs if not isinstance(obj, string_types + (AsyncResult,))]
         if bad_ids:
             raise TypeError("Invalid msg_id type %r, expected str or AsyncResult"%bad_ids[0])
         for j in jobs:
@@ -1151,14 +1175,17 @@ class Client(HasTraits):
             NOT IMPLEMENTED
             whether to restart engines after shutting them down.
         """
-        
+        from IPython.parallel.error import NoEnginesRegistered
         if restart:
             raise NotImplementedError("Engine restart is not yet implemented")
         
         block = self.block if block is None else block
         if hub:
             targets = 'all'
-        targets = self._build_targets(targets)[0]
+        try:
+            targets = self._build_targets(targets)[0]
+        except NoEnginesRegistered:
+            targets = []
         for t in targets:
             self.session.send(self._control_socket, 'shutdown_request',
                         content={'restart':restart},ident=t)
@@ -1256,7 +1283,7 @@ class Client(HasTraits):
         metadata = metadata if metadata is not None else {}
 
         # validate arguments
-        if not isinstance(code, basestring):
+        if not isinstance(code, string_types):
             raise TypeError("code must be text, not %s" % type(code))
         if not isinstance(metadata, dict):
             raise TypeError("metadata must be dict, not %s" % type(metadata))
@@ -1374,20 +1401,27 @@ class Client(HasTraits):
         block = self.block if block is None else block
         if indices_or_msg_ids is None:
             indices_or_msg_ids = -1
-
+        
+        single_result = False
         if not isinstance(indices_or_msg_ids, (list,tuple)):
             indices_or_msg_ids = [indices_or_msg_ids]
+            single_result = True
 
         theids = []
         for id in indices_or_msg_ids:
             if isinstance(id, int):
                 id = self.history[id]
-            if not isinstance(id, basestring):
+            if not isinstance(id, string_types):
                 raise TypeError("indices must be str or int, not %r"%id)
             theids.append(id)
 
-        local_ids = filter(lambda msg_id: msg_id in self.history or msg_id in self.results, theids)
-        remote_ids = filter(lambda msg_id: msg_id not in local_ids, theids)
+        local_ids = [msg_id for msg_id in theids if (msg_id in self.outstanding or msg_id in self.results)]
+        remote_ids = [msg_id for msg_id in theids if msg_id not in local_ids]
+        
+        # given single msg_id initially, get_result shot get the result itself,
+        # not a length-one list
+        if single_result:
+            theids = theids[0]
 
         if remote_ids:
             ar = AsyncHubResult(self, msg_ids=theids)
@@ -1432,7 +1466,7 @@ class Client(HasTraits):
         for id in indices_or_msg_ids:
             if isinstance(id, int):
                 id = self.history[id]
-            if not isinstance(id, basestring):
+            if not isinstance(id, string_types):
                 raise TypeError("indices must be str or int, not %r"%id)
             theids.append(id)
 
@@ -1489,7 +1523,7 @@ class Client(HasTraits):
         for msg_id in msg_ids:
             if isinstance(msg_id, int):
                 msg_id = self.history[msg_id]
-            if not isinstance(msg_id, basestring):
+            if not isinstance(msg_id, string_types):
                 raise TypeError("msg_ids must be str, not %r"%msg_id)
             theids.append(msg_id)
 
@@ -1530,8 +1564,8 @@ class Client(HasTraits):
         for msg_id in sorted(theids):
             if msg_id in content['completed']:
                 rec = content[msg_id]
-                parent = rec['header']
-                header = rec['result_header']
+                parent = extract_dates(rec['header'])
+                header = extract_dates(rec['result_header'])
                 rcontent = rec['result_content']
                 iodict = rec['io']
                 if isinstance(rcontent, str):
@@ -1546,7 +1580,7 @@ class Client(HasTraits):
                 )
                 md.update(self._extract_metadata(md_msg))
                 if rec.get('received'):
-                    md['received'] = rec['received']
+                    md['received'] = parse_date(rec['received'])
                 md.update(iodict)
                 
                 if rcontent['status'] == 'ok':
@@ -1555,7 +1589,7 @@ class Client(HasTraits):
                     elif header['msg_type'] == 'execute_reply':
                         res = ExecuteReply(msg_id, rcontent, md)
                     else:
-                        raise KeyError("unhandled msg type: %r" % header[msg_type])
+                        raise KeyError("unhandled msg type: %r" % header['msg_type'])
                 else:
                     res = self._unwrap_exception(rcontent)
                     failures.append(res)
@@ -1602,8 +1636,78 @@ class Client(HasTraits):
         else:
             return content
 
+    def _build_msgids_from_target(self, targets=None):
+        """Build a list of msg_ids from the list of engine targets"""
+        if not targets: # needed as _build_targets otherwise uses all engines
+            return []
+        target_ids = self._build_targets(targets)[0] 
+        return [md_id for md_id in self.metadata if self.metadata[md_id]["engine_uuid"] in target_ids]
+    
+    def _build_msgids_from_jobs(self, jobs=None):
+        """Build a list of msg_ids from "jobs" """
+        if not jobs:
+            return []
+        msg_ids = []
+        if isinstance(jobs, string_types + (AsyncResult,)):
+            jobs = [jobs]
+        bad_ids = [obj for obj in jobs if not isinstance(obj, string_types + (AsyncResult,))]
+        if bad_ids:
+            raise TypeError("Invalid msg_id type %r, expected str or AsyncResult"%bad_ids[0])
+        for j in jobs:
+            if isinstance(j, AsyncResult):
+                msg_ids.extend(j.msg_ids)
+            else:
+                msg_ids.append(j)
+        return msg_ids        
+        
+    def purge_local_results(self, jobs=[], targets=[]):
+        """Clears the client caches of results and frees such memory.
+        
+        Individual results can be purged by msg_id, or the entire
+        history of specific targets can be purged.
+
+        Use `purge_local_results('all')` to scrub everything from the Clients's db.
+
+        The client must have no outstanding tasks before purging the caches.
+        Raises `AssertionError` if there are still outstanding tasks.
+
+        After this call all `AsyncResults` are invalid and should be discarded.
+
+        If you must "reget" the results, you can still do so by using
+        `client.get_result(msg_id)` or `client.get_result(asyncresult)`. This will
+        redownload the results from the hub if they are still available
+        (i.e `client.purge_hub_results(...)` has not been called.        
+
+        Parameters
+        ----------
+
+        jobs : str or list of str or AsyncResult objects
+                the msg_ids whose results should be purged.
+        targets : int/str/list of ints/strs
+                The targets, by int_id, whose entire results are to be purged.
+
+                default : None
+        """
+        assert not self.outstanding, "Can't purge a client with outstanding tasks!"
+        
+        if not targets and not jobs:
+            raise ValueError("Must specify at least one of `targets` and `jobs`")
+                
+        if jobs == 'all':
+            self.results.clear()
+            self.metadata.clear()
+            return
+        else:
+            msg_ids = []
+            msg_ids.extend(self._build_msgids_from_target(targets))
+            msg_ids.extend(self._build_msgids_from_jobs(jobs))
+            for mid in msg_ids:
+                self.results.pop(mid)
+                self.metadata.pop(mid)
+
+
     @spin_first
-    def purge_results(self, jobs=[], targets=[]):
+    def purge_hub_results(self, jobs=[], targets=[]):
         """Tell the Hub to forget results.
 
         Individual results can be purged by msg_id, or the entire
@@ -1630,17 +1734,7 @@ class Client(HasTraits):
         if jobs == 'all':
             msg_ids = jobs
         else:
-            msg_ids = []
-            if isinstance(jobs, (basestring,AsyncResult)):
-                jobs = [jobs]
-            bad_ids = filter(lambda obj: not isinstance(obj, (basestring, AsyncResult)), jobs)
-            if bad_ids:
-                raise TypeError("Invalid msg_id type %r, expected str or AsyncResult"%bad_ids[0])
-            for j in jobs:
-                if isinstance(j, AsyncResult):
-                    msg_ids.extend(j.msg_ids)
-                else:
-                    msg_ids.append(j)
+            msg_ids = self._build_msgids_from_jobs(jobs)
 
         content = dict(engine_ids=targets, msg_ids=msg_ids)
         self.session.send(self._query_socket, "purge_request", content=content)
@@ -1650,6 +1744,41 @@ class Client(HasTraits):
         content = msg['content']
         if content['status'] != 'ok':
             raise self._unwrap_exception(content)
+
+    def purge_results(self,  jobs=[], targets=[]):
+        """Clears the cached results from both the hub and the local client
+                
+        Individual results can be purged by msg_id, or the entire
+        history of specific targets can be purged.
+
+        Use `purge_results('all')` to scrub every cached result from both the Hub's and 
+        the Client's db.
+        
+        Equivalent to calling both `purge_hub_results()` and `purge_client_results()` with 
+        the same arguments.
+
+        Parameters
+        ----------
+
+        jobs : str or list of str or AsyncResult objects
+                the msg_ids whose results should be forgotten.
+        targets : int/str/list of ints/strs
+                The targets, by int_id, whose entire history is to be purged.
+
+                default : None
+        """
+        self.purge_local_results(jobs=jobs, targets=targets)
+        self.purge_hub_results(jobs=jobs, targets=targets)
+
+    def purge_everything(self):
+        """Clears all content from previous Tasks from both the hub and the local client
+        
+        In addition to calling `purge_results("all")` it also deletes the history and 
+        other bookkeeping lists.        
+        """
+        self.purge_results("all")
+        self.history = []
+        self.session.digest_history.clear()
 
     @spin_first
     def hub_history(self):
@@ -1694,7 +1823,7 @@ class Client(HasTraits):
             The subset of keys to be returned.  The default is to fetch everything but buffers.
             'msg_id' will *always* be included.
         """
-        if isinstance(keys, basestring):
+        if isinstance(keys, string_types):
             keys = [keys]
         content = dict(query=query, keys=keys)
         self.session.send(self._query_socket, "db_request", content=content)
@@ -1713,6 +1842,13 @@ class Client(HasTraits):
         has_bufs = buffer_lens is not None
         has_rbufs = result_buffer_lens is not None
         for i,rec in enumerate(records):
+            # unpack datetime objects
+            for hkey in ('header', 'result_header'):
+                if hkey in rec:
+                    rec[hkey] = extract_dates(rec[hkey])
+            for dtkey in ('submitted', 'started', 'completed', 'received'):
+                if dtkey in rec:
+                    rec[dtkey] = parse_date(rec[dtkey])
             # relink buffers
             if has_bufs:
                 blen = buffer_lens[i]

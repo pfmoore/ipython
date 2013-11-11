@@ -19,8 +19,6 @@ Limitations:
 # Module imports
 
 # From the standard library
-import __builtin__ as builtin_mod
-import commands
 import doctest
 import inspect
 import logging
@@ -31,7 +29,6 @@ import traceback
 import unittest
 
 from inspect import getmodule
-from StringIO import StringIO
 
 # We are overriding the default doctest runner, so we need to import a few
 # things from doctest directly
@@ -48,10 +45,12 @@ from nose.plugins import doctests, Plugin
 from nose.util import anyp, getpackage, test_address, resolve_name, tolist
 
 # Our own imports
+from IPython.utils.py3compat import builtin_mod, PY3, getcwd
 
-# We're temporarily using TerminalMagics.cleanup_input() until the functionality
-# is moved into core.
-from IPython.frontend.terminal.interactiveshell import TerminalMagics
+if PY3:
+    from io import StringIO
+else:
+    from StringIO import StringIO
 
 #-----------------------------------------------------------------------------
 # Module globals and other constants
@@ -100,7 +99,7 @@ class DocTestFinder(doctest.DocTestFinder):
         if module is None:
             return True
         elif inspect.isfunction(object):
-            return module.__dict__ is object.func_globals
+            return module.__dict__ is object.__globals__
         elif inspect.isbuiltin(object):
             return module.__name__ == object.__module__
         elif inspect.isclass(object):
@@ -110,7 +109,7 @@ class DocTestFinder(doctest.DocTestFinder):
             # __module__ attribute of methods, but since the same error is easy
             # to make by extension code writers, having this safety in place
             # isn't such a bad idea
-            return module.__name__ == object.im_class.__module__
+            return module.__name__ == object.__self__.__class__.__module__
         elif inspect.getmodule(object) is not None:
             return module is inspect.getmodule(object)
         elif hasattr(object, '__module__'):
@@ -118,7 +117,7 @@ class DocTestFinder(doctest.DocTestFinder):
         elif isinstance(object, property):
             return True # [XX] no way not be sure.
         else:
-            raise ValueError("object must be a class or function")
+            raise ValueError("object must be a class or function, got %r" % object)
 
     def _find(self, tests, obj, name, module, source_lines, globs, seen):
         """
@@ -158,7 +157,7 @@ class DocTestFinder(doctest.DocTestFinder):
                 if isinstance(val, staticmethod):
                     val = getattr(obj, valname)
                 if isinstance(val, classmethod):
-                    val = getattr(obj, valname).im_func
+                    val = getattr(obj, valname).__func__
 
                 # Recurse to methods, properties, and nested classes.
                 if ((inspect.isfunction(val) or inspect.isclass(val) or
@@ -256,7 +255,7 @@ class DocTestCase(doctests.DocTestCase):
             # Save our current directory and switch out to the one where the
             # test was originally created, in case another doctest did a
             # directory change.  We'll restore this in the finally clause.
-            curdir = os.getcwdu()
+            curdir = getcwd()
             #print 'runTest in dir:', self._ori_dir  # dbg
             os.chdir(self._ori_dir)
 
@@ -300,7 +299,7 @@ class DocTestCase(doctests.DocTestCase):
         # XXX - fperez: I am not sure if this is truly a bug in nose 0.11, but
         # it does look like one to me: its tearDown method tries to run
         #
-        # delattr(__builtin__, self._result_var)
+        # delattr(builtin_mod, self._result_var)
         #
         # without checking that the attribute really is there; it implicitly
         # assumes it should have been set via displayhook.  But if the
@@ -386,7 +385,11 @@ class IPDocTestParser(doctest.DocTestParser):
 
     def ip2py(self,source):
         """Convert input IPython source into valid Python."""
-        return TerminalMagics(_ip).cleanup_input(source)
+        block = _ip.input_transformer_manager.transform_cell(source)
+        if len(block.splitlines()) == 1:
+            return _ip.prefilter(block)
+        else:
+            return block
 
     def parse(self, string, name='<string>'):
         """
@@ -597,23 +600,6 @@ class ExtensionDoctest(doctests.Doctest):
     name = 'extdoctest'   # call nosetests with --with-extdoctest
     enabled = True
 
-    def __init__(self,exclude_patterns=None):
-        """Create a new ExtensionDoctest plugin.
-
-        Parameters
-        ----------
-
-        exclude_patterns : sequence of strings, optional
-          These patterns are compiled as regular expressions, subsequently used
-          to exclude any filename which matches them from inclusion in the test
-          suite (using pattern.search(), NOT pattern.match() ).
-        """
-
-        if exclude_patterns is None:
-            exclude_patterns = []
-        self.exclude_patterns = map(re.compile,exclude_patterns)
-        doctests.Doctest.__init__(self)
-
     def options(self, parser, env=os.environ):
         Plugin.options(self, parser, env)
         parser.add_option('--doctest-tests', action='store_true',
@@ -715,35 +701,6 @@ class ExtensionDoctest(doctests.Doctest):
                     yield DocFileCase(test)
                 else:
                     yield False # no tests to load
-
-    def wantFile(self,filename):
-        """Return whether the given filename should be scanned for tests.
-
-        Modified version that accepts extension modules as valid containers for
-        doctests.
-        """
-        #print '*** ipdoctest- wantFile:',filename  # dbg
-
-        for pat in self.exclude_patterns:
-            if pat.search(filename):
-                # print '###>>> SKIP:',filename  # dbg
-                return False
-
-        if is_extension_module(filename):
-            return True
-        else:
-            return doctests.Doctest.wantFile(self,filename)
-
-    def wantDirectory(self, directory):
-        """Return whether the given directory should be scanned for tests.
-
-        Modified version that supports exclusions.
-        """
-
-        for pat in self.exclude_patterns:
-            if pat.search(directory):
-                return False
-        return True
 
 
 class IPythonDoctest(ExtensionDoctest):

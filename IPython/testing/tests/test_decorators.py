@@ -1,11 +1,11 @@
 """Tests for the decorators we've created for IPython.
 """
+from __future__ import print_function
 
 # Module imports
 # Std lib
 import inspect
 import sys
-import unittest
 
 # Third party
 import nose.tools as nt
@@ -13,7 +13,6 @@ import nose.tools as nt
 # Our own
 from IPython.testing import decorators as dec
 from IPython.testing.skipdoctest import skip_doctest
-from IPython.testing.ipunittest import ParametricTestCase
 
 #-----------------------------------------------------------------------------
 # Utilities
@@ -34,11 +33,11 @@ def getargspec(obj):
     if inspect.isfunction(obj):
         func_obj = obj
     elif inspect.ismethod(obj):
-        func_obj = obj.im_func
+        func_obj = obj.__func__
     else:
         raise TypeError('arg is not a Python function')
-    args, varargs, varkw = inspect.getargs(func_obj.func_code)
-    return args, varargs, varkw, func_obj.func_defaults
+    args, varargs, varkw = inspect.getargs(func_obj.__code__)
+    return args, varargs, varkw, func_obj.__defaults__
 
 #-----------------------------------------------------------------------------
 # Testing functions
@@ -47,24 +46,6 @@ def getargspec(obj):
 def trivial():
     """A trivial test"""
     pass
-
-# Some examples of parametric tests.
-
-def is_smaller(i,j):
-    assert i<j,"%s !< %s" % (i,j)
-
-class Tester(ParametricTestCase):
-
-    def test_parametric(self):
-        yield is_smaller(3, 4)
-        x, y = 1, 2
-        yield is_smaller(x, y)
-
-@dec.parametric
-def test_par_standalone():
-    yield is_smaller(3, 4)
-    x, y = 1, 2
-    yield is_smaller(x, y)
 
 
 @dec.skip
@@ -87,9 +68,9 @@ def doctest_bad(x,y=1,**k):
     >>> 1+1
     3
     """
-    print 'x:',x
-    print 'y:',y
-    print 'k:',k
+    print('x:',x)
+    print('y:',y)
+    print('k:',k)
 
 
 def call_doctest_bad():
@@ -137,7 +118,7 @@ class FooClass(object):
         >>> f = FooClass(3)
         junk
         """
-        print 'Making a FooClass.'
+        print('Making a FooClass.')
         self.x = x
         
     @skip_doctest

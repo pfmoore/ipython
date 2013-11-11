@@ -19,7 +19,6 @@ from __future__ import print_function
 import os
 import sys
 import ctypes
-import msvcrt
 
 from ctypes import c_int, POINTER
 from ctypes.wintypes import LPCWSTR, HLOCAL
@@ -28,7 +27,6 @@ from subprocess import STDOUT
 # our own imports
 from ._process_common import read_no_interrupt, process_handler, arg_split as py_arg_split
 from . import py3compat
-from . import text
 from .encoding import DEFAULT_ENCODING
 
 #-----------------------------------------------------------------------------
@@ -46,8 +44,8 @@ class AvoidUNCPath(object):
     change and None otherwise, so that users can apply the necessary adjustment
     to their system calls in the event of a change.
 
-    Example
-    -------
+    Examples
+    --------
     ::
         cmd = 'dir'
         with AvoidUNCPath() as path:
@@ -56,7 +54,7 @@ class AvoidUNCPath(object):
             os.system(cmd)
     """
     def __enter__(self):
-        self.path = os.getcwdu()
+        self.path = py3compat.getcwd()
         self.is_unc_path = self.path.startswith(r"\\")
         if self.is_unc_path:
             # change to c drive (as cmd.exe cannot handle UNC addresses)
@@ -84,7 +82,7 @@ def _find_cmd(cmd):
         path = None
         for ext in extensions:
             try:
-                path = SearchPath(PATH, cmd + ext)[0]
+                path = SearchPath(PATH, cmd, ext)[0]
             except:
                 pass
         if path is None:

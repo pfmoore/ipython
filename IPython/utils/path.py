@@ -16,6 +16,9 @@ Utilities for path handling.
 
 import os
 import sys
+import errno
+import shutil
+import random
 import tempfile
 import warnings
 from hashlib import md5
@@ -85,6 +88,13 @@ def unquote_filename(name, win32=(sys.platform=='win32')):
             name = name[1:-1]
     return name
 
+def compress_user(path):
+    """Reverse of :func:`os.path.expanduser`
+    """
+    home = os.path.expanduser('~')
+    if path.startswith(home):
+        path =  "~" + path[len(home):]
+    return path
 
 def get_py_filename(name, force_win32=None):
     """Return a valid python filename in the current directory.
@@ -152,11 +162,11 @@ def filefind(filename, path_dirs=None):
 
     if path_dirs is None:
         path_dirs = ("",)
-    elif isinstance(path_dirs, basestring):
+    elif isinstance(path_dirs, py3compat.string_types):
         path_dirs = (path_dirs,)
 
     for path in path_dirs:
-        if path == '.': path = os.getcwdu()
+        if path == '.': path = py3compat.getcwd()
         testname = expand_path(os.path.join(path, filename))
         if os.path.isfile(testname):
             return os.path.abspath(testname)
@@ -172,8 +182,7 @@ class HomeDirError(Exception):
 def get_home_dir(require_writable=False):
     """Return the 'home' directory, as a unicode string.
 
-    * First, check for frozen env in case of py2exe
-    * Otherwise, defer to os.path.expanduser('~')
+    Uses os.path.expanduser('~'), and checks for writability.
     
     See stdlib docs for how this is determined.
     $HOME is first priority on *ALL* platforms.
@@ -189,19 +198,6 @@ def get_home_dir(require_writable=False):
             The path is resolved, but it is not guaranteed to exist or be writable.
     """
 
-    # first, check py2exe distribution root directory for _ipython.
-    # This overrides all. Normally does not exist.
-
-    if hasattr(sys, "frozen"): #Is frozen by py2exe
-        if '\\library.zip\\' in IPython.__file__.lower():#libraries compressed to zip-file
-            root, rest = IPython.__file__.lower().split('library.zip')
-        else:
-            root=os.path.join(os.path.split(IPython.__file__)[0],"../../")
-        root=os.path.abspath(root).rstrip('\\')
-        if _writable_dir(os.path.join(root, '_ipython')):
-            os.environ["IPYKITROOT"] = root
-        return py3compat.cast_unicode(root, fs_encoding)
-    
     homedir = os.path.expanduser('~')
     # Next line will make things work even when /home/ is a symlink to
     # /usr/home as it is on FreeBSD, for example
@@ -210,7 +206,10 @@ def get_home_dir(require_writable=False):
     if not _writable_dir(homedir) and os.name == 'nt':
         # expanduser failed, use the registry to get the 'My Documents' folder.
         try:
-            import _winreg as wreg
+            try:
+                import winreg as wreg  # Py 3
+            except ImportError:
+                import _winreg as wreg  # Py 2
             key = wreg.OpenKey(
                 wreg.HKEY_CURRENT_USER,
                 "Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders"
@@ -244,6 +243,24 @@ def get_xdg_dir():
     return None
 
 
+def get_xdg_cache_dir():
+    """Return the XDG_CACHE_HOME, if it is defined and exists, else None.
+
+    This is only for non-OS X posix (Linux,Unix,etc.) systems.
+    """
+
+    env = os.environ
+
+    if os.name == 'posix' and sys.platform != 'darwin':
+        # Linux, Unix, AIX, etc.
+        # use ~/.cache if empty OR not set
+        xdg = env.get("XDG_CACHE_HOME", None) or os.path.join(get_home_dir(), '.cache')
+        if xdg and _writable_dir(xdg):
+            return py3compat.cast_unicode(xdg, fs_encoding)
+
+    return None
+
+
 def get_ipython_dir():
     """Get the IPython directory for this platform and user.
 
@@ -256,7 +273,6 @@ def get_ipython_dir():
 
 
     ipdir_def = '.ipython'
-    xdg_def = 'ipython'
 
     home_dir = get_home_dir()
     xdg_dir = get_xdg_dir()
@@ -267,20 +283,21 @@ def get_ipython_dir():
                       'Please use IPYTHONDIR instead.')
     ipdir = env.get('IPYTHONDIR', env.get('IPYTHON_DIR', None))
     if ipdir is None:
-        # not set explicitly, use XDG_CONFIG_HOME or HOME
-        home_ipdir = pjoin(home_dir, ipdir_def)
+        # not set explicitly, use ~/.ipython
+        ipdir = pjoin(home_dir, ipdir_def)
         if xdg_dir:
-            # use XDG, as long as the user isn't already
-            # using $HOME/.ipython and *not* XDG/ipython
+            # Several IPython versions (up to 1.x) defaulted to .config/ipython
+            # on Linux. We have decided to go back to using .ipython everywhere
+            xdg_ipdir = pjoin(xdg_dir, 'ipython')
 
-            xdg_ipdir = pjoin(xdg_dir, xdg_def)
-
-            if _writable_dir(xdg_ipdir) or not _writable_dir(home_ipdir):
-                ipdir = xdg_ipdir
-
-        if ipdir is None:
-            # not using XDG
-            ipdir = home_ipdir
+            if _writable_dir(xdg_ipdir):
+                cu = compress_user
+                if os.path.exists(ipdir):
+                    warnings.warn(('Ignoring {0} in favour of {1}. Remove {0} '
+                    'to get rid of this message').format(cu(xdg_ipdir), cu(ipdir)))
+                else:
+                    warnings.warn('Moving {0} to {1}'.format(cu(xdg_ipdir), cu(ipdir)))
+                    os.rename(xdg_ipdir, ipdir)
 
     ipdir = os.path.normpath(os.path.expanduser(ipdir))
 
@@ -290,12 +307,26 @@ def get_ipython_dir():
                         " using a temp directory."%ipdir)
         ipdir = tempfile.mkdtemp()
     elif not os.path.exists(ipdir):
-        parent = ipdir.rsplit(os.path.sep, 1)[0]
+        parent = os.path.dirname(ipdir)
         if not _writable_dir(parent):
             # ipdir does not exist and parent isn't writable
             warnings.warn("IPython parent '%s' is not a writable location,"
                         " using a temp directory."%parent)
             ipdir = tempfile.mkdtemp()
+
+    return py3compat.cast_unicode(ipdir, fs_encoding)
+
+
+def get_ipython_cache_dir():
+    """Get the cache directory it is created if it does not exist."""
+    xdgdir = get_xdg_cache_dir()
+    if xdgdir is None:
+        return get_ipython_dir()
+    ipdir = os.path.join(xdgdir, "ipython")
+    if not os.path.exists(ipdir) and _writable_dir(xdgdir):
+        os.makedirs(ipdir)
+    elif not _writable_dir(xdgdir):
+        return get_ipython_dir()
 
     return py3compat.cast_unicode(ipdir, fs_encoding)
 
@@ -373,8 +404,11 @@ def shellglob(args):
 
     """
     expanded = []
+    # Do not unescape backslash in Windows as it is interpreted as
+    # path separator:
+    unescape = unescape_glob if sys.platform != 'win32' else lambda x: x
     for a in args:
-        expanded.extend(glob.glob(a) or [unescape_glob(a)])
+        expanded.extend(glob.glob(a) or [unescape(a)])
     return expanded
 
 
@@ -489,3 +523,52 @@ def get_security_file(filename, profile='default'):
         raise IOError("Profile %r not found")
     return filefind(filename, ['.', pd.security_dir])
 
+
+ENOLINK = 1998
+
+def link(src, dst):
+    """Hard links ``src`` to ``dst``, returning 0 or errno.
+
+    Note that the special errno ``ENOLINK`` will be returned if ``os.link`` isn't
+    supported by the operating system.
+    """
+
+    if not hasattr(os, "link"):
+        return ENOLINK
+    link_errno = 0
+    try:
+        os.link(src, dst)
+    except OSError as e:
+        link_errno = e.errno
+    return link_errno
+
+
+def link_or_copy(src, dst):
+    """Attempts to hardlink ``src`` to ``dst``, copying if the link fails.
+
+    Attempts to maintain the semantics of ``shutil.copy``.
+
+    Because ``os.link`` does not overwrite files, a unique temporary file
+    will be used if the target already exists, then that file will be moved
+    into place.
+    """
+
+    if os.path.isdir(dst):
+        dst = os.path.join(dst, os.path.basename(src))
+
+    link_errno = link(src, dst)
+    if link_errno == errno.EEXIST:
+        new_dst = dst + "-temp-%04X" %(random.randint(1, 16**4), )
+        try:
+            link_or_copy(src, new_dst)
+        except:
+            try:
+                os.remove(new_dst)
+            except OSError:
+                pass
+            raise
+        os.rename(new_dst, dst)
+    elif link_errno != 0:
+        # Either link isn't supported, or the filesystem doesn't support
+        # linking, or 'src' and 'dst' are on different filesystems.
+        shutil.copy(src, dst)

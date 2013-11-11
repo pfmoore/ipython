@@ -6,6 +6,7 @@ SPHINXOPTS    =
 SPHINXBUILD   = sphinx-build
 PAPER         =
 SRCDIR        = source
+BUILDDIR      = build
 
 # Internal variables.
 PAPEROPT_a4     = -D latex_paper_size=a4
@@ -18,12 +19,15 @@ default: html
 
 help:
 	@echo "Please use \`make <target>' where <target> is one of"
-	@echo "  html      to make standalone HTML files"
-	@echo "  pickle    to make pickle files (usable by e.g. sphinx-web)"
-	@echo "  htmlhelp  to make HTML files and a HTML help project"
-	@echo "  latex     to make LaTeX files, you can set PAPER=a4 or PAPER=letter"
-	@echo "  changes   to make an overview over all changed/added/deprecated items"
-	@echo "  linkcheck to check all external links for integrity"
+	@echo "  html        standalone HTML files"
+	@echo "  html_noapi  same as above, without the time consuming API docs"
+	@echo "  pickle      pickle files (usable by e.g. sphinx-web)"
+	@echo "  htmlhelp    HTML files and a HTML help project"
+	@echo "  latex       LaTeX files, you can set PAPER=a4 or PAPER=letter"
+	@echo "  texinfo     Texinfo files"
+	@echo "  info        Texinfo files and run them through makeinfo"
+	@echo "  changes     an overview over all changed/added/deprecated items"
+	@echo "  linkcheck   check all external links for integrity (takes a long time)"
 	@echo
 	@echo "Compound utility targets:"
 	@echo "pdf          latex and then runs the PDF generation"
@@ -31,8 +35,12 @@ help:
 	@echo "dist         all, and then puts the results in dist/"
 	@echo "gitwash-update update git workflow from source repo"
 
-clean:
-	-rm -rf build/* dist/* $(SRCDIR)/api/generated
+clean_api:
+	-rm -rf $(SRCDIR)/api/generated
+
+clean: clean_api
+	-rm -rf build/* dist/*
+	-rm -rf $(SRCDIR)/config/options/generated
 
 pdf: latex
 	cd build/latex && make all-pdf
@@ -49,11 +57,20 @@ dist: html
 	cp -al build/html .
 	@echo "Build finished.  Final docs are in html/"
 
-html: api
+html: api autoconfig
+html_noapi: clean_api autoconfig
+
+html html_noapi:
 	mkdir -p build/html build/doctrees
 	$(SPHINXBUILD) -b html $(ALLSPHINXOPTS) build/html
 	@echo
 	@echo "Build finished. The HTML pages are in build/html."
+
+autoconfig: source/config/options/generated
+
+source/config/options/generated:
+	python autogen_config.py
+	@echo "Created docs for config options"
 
 api: source/api/generated/gen.txt
 
@@ -78,7 +95,17 @@ htmlhelp:
 	@echo "Build finished; now you can run HTML Help Workshop with the" \
 	      ".hhp project file in build/htmlhelp."
 
-latex: api
+qthelp:
+	mkdir -p build/qthelp
+	$(SPHINXBUILD) -b qthelp $(ALLSPHINXOPTS) build/qthelp
+	@echo
+	@echo "Build finished; now you can run "qcollectiongenerator" with the" \
+	      ".qhcp project file in $(BUILDDIR)/qthelp, like this:"
+	@echo "# qcollectiongenerator $(BUILDDIR)/qthelp/IPython.qhcp"
+	@echo "To view the help file:"
+	@echo "# assistant -collectionFile $(BUILDDIR)/qthelp/IPython.qhc"
+
+latex: api autoconfig
 	mkdir -p build/latex build/doctrees
 	$(SPHINXBUILD) -b latex $(ALLSPHINXOPTS) build/latex
 	@echo
@@ -97,14 +124,28 @@ linkcheck:
 	$(SPHINXBUILD) -b linkcheck $(ALLSPHINXOPTS) build/linkcheck
 	@echo
 	@echo "Link check complete; look for any errors in the above output " \
-	      "or in build/linkcheck/output.txt."
+	      "or in build/linkcheck/output.rst."
 
 gitwash-update:
 	python ../tools/gitwash_dumper.py source/development ipython
-	cd source/development/gitwash && rename 's/.rst/.txt/' *.rst
 
 nightly: dist
 	rsync -avH --delete dist/ ipython:www/doc/nightly
 
 gh-pages: clean html
 	python gh-pages.py
+
+texinfo:
+	mkdir -p $(BUILDDIR)/texinfo
+	$(SPHINXBUILD) -b texinfo $(ALLSPHINXOPTS) $(BUILDDIR)/texinfo
+	@echo
+	@echo "Build finished. The Texinfo files are in $(BUILDDIR)/texinfo."
+	@echo "Run \`make' in that directory to run these through makeinfo" \
+	      "(use \`make info' here to do that automatically)."
+
+info:
+	mkdir -p $(BUILDDIR)/texinfo
+	$(SPHINXBUILD) -b texinfo $(ALLSPHINXOPTS) $(BUILDDIR)/texinfo
+	@echo "Running Texinfo files through makeinfo..."
+	make -C $(BUILDDIR)/texinfo info
+	@echo "makeinfo finished; the Info files are in $(BUILDDIR)/texinfo."

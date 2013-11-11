@@ -36,11 +36,13 @@ from IPython.parallel.apps.baseapp import (
     base_flags,
     catch_config_error,
 )
-from IPython.zmq.log import EnginePUBHandler
-from IPython.zmq.ipkernel import Kernel, IPKernelApp
-from IPython.zmq.session import (
+from IPython.kernel.zmq.log import EnginePUBHandler
+from IPython.kernel.zmq.ipkernel import Kernel
+from IPython.kernel.zmq.kernelapp import IPKernelApp
+from IPython.kernel.zmq.session import (
     Session, session_aliases, session_flags
 )
+from IPython.kernel.zmq.zmqshell import ZMQInteractiveShell
 
 from IPython.config.configurable import Configurable
 
@@ -55,9 +57,6 @@ from IPython.utils.traitlets import Bool, Unicode, Dict, List, Float, Instance
 #-----------------------------------------------------------------------------
 # Module level variables
 #-----------------------------------------------------------------------------
-
-#: The default config file name for this application
-default_config_file_name = u'ipengine_config.py'
 
 _description = """Start an IPython engine for parallel computing.
 
@@ -142,8 +141,7 @@ class IPEngineApp(BaseParallelApplication):
     name = 'ipengine'
     description = _description
     examples = _examples
-    config_file_name = Unicode(default_config_file_name)
-    classes = List([ProfileDir, Session, EngineFactory, Kernel, MPI])
+    classes = List([ZMQInteractiveShell, ProfileDir, Session, EngineFactory, Kernel, MPI])
 
     startup_script = Unicode(u'', config=True,
         help='specify a script to be run at startup')
@@ -209,18 +207,23 @@ class IPEngineApp(BaseParallelApplication):
         config = self.config
         
         with open(self.url_file) as f:
-            d = json.loads(f.read())
+            num_tries = 0
+            max_tries = 5
+            d = ""
+            while not d:
+                try:
+                    d = json.loads(f.read())
+                except ValueError:
+                    if num_tries > max_tries:
+                        raise
+                    num_tries += 1
+                    time.sleep(0.5)
         
         # allow hand-override of location for disambiguation
         # and ssh-server
-        try:
-            config.EngineFactory.location
-        except AttributeError:
+        if 'EngineFactory.location' not in config:
             config.EngineFactory.location = d['location']
-        
-        try:
-            config.EngineFactory.sshserver
-        except AttributeError:
+        if 'EngineFactory.sshserver' not in config:
             config.EngineFactory.sshserver = d.get('ssh')
         
         location = config.EngineFactory.location
@@ -229,9 +232,10 @@ class IPEngineApp(BaseParallelApplication):
         ip = disambiguate_ip_address(ip, location)
         d['interface'] = '%s://%s' % (proto, ip)
         
-        # DO NOT allow override of basic URLs, serialization, or exec_key
+        # DO NOT allow override of basic URLs, serialization, or key
         # JSON file takes top priority there
-        config.Session.key = cast_bytes(d['exec_key'])
+        config.Session.key = cast_bytes(d['key'])
+        config.Session.signature_scheme = d['signature_scheme']
         
         config.EngineFactory.url = d['interface'] + ':%i' % d['registration']
         
@@ -314,21 +318,17 @@ class IPEngineApp(BaseParallelApplication):
             self.log.fatal("Fatal: url file never arrived: %s", self.url_file)
             self.exit(1)
         
+        exec_lines = []
+        for app in ('IPKernelApp', 'InteractiveShellApp'):
+            if '%s.exec_lines' in config:
+                exec_lines = config.IPKernelApp.exec_lines = config[app].exec_lines
+                break
         
-        try:
-            exec_lines = config.IPKernelApp.exec_lines
-        except AttributeError:
-            try:
-                exec_lines = config.InteractiveShellApp.exec_lines
-            except AttributeError:
-                exec_lines = config.IPKernelApp.exec_lines = []
-        try:
-            exec_files = config.IPKernelApp.exec_files
-        except AttributeError:
-            try:
-                exec_files = config.InteractiveShellApp.exec_files
-            except AttributeError:
-                exec_files = config.IPKernelApp.exec_files = []
+        exec_files = []
+        for app in ('IPKernelApp', 'InteractiveShellApp'):
+            if '%s.exec_files' in config:
+                exec_files = config.IPKernelApp.exec_files = config[app].exec_files
+                break
         
         if self.startup_script:
             exec_files.append(self.startup_script)
@@ -358,14 +358,14 @@ class IPEngineApp(BaseParallelApplication):
     
     def init_mpi(self):
         global mpi
-        self.mpi = MPI(config=self.config)
+        self.mpi = MPI(parent=self)
 
         mpi_import_statement = self.mpi.init_script
         if mpi_import_statement:
             try:
                 self.log.info("Initializing MPI:")
                 self.log.info(mpi_import_statement)
-                exec mpi_import_statement in globals()
+                exec(mpi_import_statement, globals())
             except:
                 mpi = None
         else:
@@ -386,11 +386,7 @@ class IPEngineApp(BaseParallelApplication):
             self.log.critical("Engine Interrupted, shutting down...\n")
 
 
-def launch_new_instance():
-    """Create and run the IPython engine"""
-    app = IPEngineApp.instance()
-    app.initialize()
-    app.start()
+launch_new_instance = IPEngineApp.launch_instance
 
 
 if __name__ == '__main__':

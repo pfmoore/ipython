@@ -20,8 +20,6 @@ Authors:
 # Imports
 #-----------------------------------------------------------------------------
 
-from __future__ import with_statement
-
 import os
 import logging
 import re
@@ -29,7 +27,7 @@ import sys
 
 from subprocess import Popen, PIPE
 
-from IPython.config.application import catch_config_error
+from IPython.config.application import catch_config_error, LevelFormatter
 from IPython.core import release
 from IPython.core.crashhandler import CrashHandler
 from IPython.core.application import (
@@ -38,8 +36,10 @@ from IPython.core.application import (
     base_flags as base_ip_flags
 )
 from IPython.utils.path import expand_path
+from IPython.utils import py3compat
+from IPython.utils.py3compat import unicode_type
 
-from IPython.utils.traitlets import Unicode, Bool, Instance, Dict, List
+from IPython.utils.traitlets import Unicode, Bool, Instance, Dict
 
 #-----------------------------------------------------------------------------
 # Module errors
@@ -71,7 +71,6 @@ class ParallelCrashHandler(CrashHandler):
 base_aliases = {}
 base_aliases.update(base_ip_aliases)
 base_aliases.update({
-    'profile-dir' : 'ProfileDir.location',
     'work-dir' : 'BaseParallelApplication.work_dir',
     'log-to-file' : 'BaseParallelApplication.log_to_file',
     'clean-logs' : 'BaseParallelApplication.clean_logs',
@@ -105,13 +104,13 @@ class BaseParallelApplication(BaseIPythonApplication):
     
     def _log_format_default(self):
         """override default log format to include time"""
-        return u"%(asctime)s.%(msecs).03d [%(name)s] %(message)s"
+        return u"%(asctime)s.%(msecs).03d [%(name)s]%(highlevel)s %(message)s"
 
-    work_dir = Unicode(os.getcwdu(), config=True,
+    work_dir = Unicode(py3compat.getcwd(), config=True,
         help='Set the working dir for the process.'
     )
     def _work_dir_changed(self, name, old, new):
-        self.work_dir = unicode(expand_path(new))
+        self.work_dir = unicode_type(expand_path(new))
 
     log_to_file = Bool(config=True,
         help="whether to log to a file")
@@ -158,7 +157,7 @@ class BaseParallelApplication(BaseIPythonApplication):
         
     def to_work_dir(self):
         wd = self.work_dir
-        if unicode(wd) != os.getcwdu():
+        if unicode_type(wd) != py3compat.getcwd():
             os.chdir(wd)
             self.log.info("Changing to working dir: %s" % wd)
         # This is the working dir by now.
@@ -191,8 +190,8 @@ class BaseParallelApplication(BaseIPythonApplication):
         else:
             self._log_handler = self.log.handlers[0]
         # Add timestamps to log format:
-        self._log_formatter = logging.Formatter(self.log_format,
-                                                datefmt="%Y-%m-%d %H:%M:%S")
+        self._log_formatter = LevelFormatter(self.log_format,
+                                                datefmt=self.log_datefmt)
         self._log_handler.setFormatter(self._log_formatter)
         # do not propagate log messages to root logger
         # ipcluster app will sometimes print duplicate messages during shutdown
@@ -273,5 +272,5 @@ class BaseParallelApplication(BaseIPythonApplication):
                     " Making the likely assumption that it is."%pid
                 )
                 return True
-            pids = map(int, re.findall(r'^\W*\d+', output, re.MULTILINE))
+            pids = list(map(int, re.findall(r'^\W*\d+', output, re.MULTILINE)))
             return pid in pids

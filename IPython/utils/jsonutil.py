@@ -13,14 +13,19 @@
 # stdlib
 import math
 import re
-import sys
 import types
-from base64 import encodestring
 from datetime import datetime
 
+try:
+    # base64.encodestring is deprecated in Python 3.x
+    from base64 import encodebytes
+except ImportError:
+    # Python 2.x
+    from base64 import encodestring as encodebytes
+
 from IPython.utils import py3compat
+from IPython.utils.py3compat import string_types, unicode_type, iteritems
 from IPython.utils.encoding import DEFAULT_ENCODING
-from IPython.utils import text
 next_attr_name = '__next__' if py3compat.PY3 else 'next'
 
 #-----------------------------------------------------------------------------
@@ -28,8 +33,8 @@ next_attr_name = '__next__' if py3compat.PY3 else 'next'
 #-----------------------------------------------------------------------------
 
 # timestamp formats
-ISO8601="%Y-%m-%dT%H:%M:%S.%f"
-ISO8601_PAT=re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+$")
+ISO8601 = "%Y-%m-%dT%H:%M:%S.%f"
+ISO8601_PAT=re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{1,6})Z?([\+\-]\d{2}:?\d{2})?$")
 
 #-----------------------------------------------------------------------------
 # Classes and functions
@@ -38,8 +43,8 @@ ISO8601_PAT=re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+$")
 def rekey(dikt):
     """Rekey a dict that has been forced to use str keys where there should be
     ints by json."""
-    for k in dikt.iterkeys():
-        if isinstance(k, basestring):
+    for k in dikt:
+        if isinstance(k, string_types):
             ik=fk=None
             try:
                 ik = int(k)
@@ -57,77 +62,106 @@ def rekey(dikt):
             dikt[nk] = dikt.pop(k)
     return dikt
 
+def parse_date(s):
+    """parse an ISO8601 date string
+    
+    If it is None or not a valid ISO8601 timestamp,
+    it will be returned unmodified.
+    Otherwise, it will return a datetime object.
+    """
+    if s is None:
+        return s
+    m = ISO8601_PAT.match(s)
+    if m:
+        # FIXME: add actual timezone support
+        # this just drops the timezone info
+        notz = m.groups()[0]
+        return datetime.strptime(notz, ISO8601)
+    return s
 
 def extract_dates(obj):
     """extract ISO8601 dates from unpacked JSON"""
     if isinstance(obj, dict):
-        obj = dict(obj) # don't clobber
-        for k,v in obj.iteritems():
-            obj[k] = extract_dates(v)
+        new_obj = {} # don't clobber
+        for k,v in iteritems(obj):
+            new_obj[k] = extract_dates(v)
+        obj = new_obj
     elif isinstance(obj, (list, tuple)):
         obj = [ extract_dates(o) for o in obj ]
-    elif isinstance(obj, basestring):
-        if ISO8601_PAT.match(obj):
-            obj = datetime.strptime(obj, ISO8601)
+    elif isinstance(obj, string_types):
+        obj = parse_date(obj)
     return obj
 
 def squash_dates(obj):
     """squash datetime objects into ISO8601 strings"""
     if isinstance(obj, dict):
         obj = dict(obj) # don't clobber
-        for k,v in obj.iteritems():
+        for k,v in iteritems(obj):
             obj[k] = squash_dates(v)
     elif isinstance(obj, (list, tuple)):
         obj = [ squash_dates(o) for o in obj ]
     elif isinstance(obj, datetime):
-        obj = obj.strftime(ISO8601)
+        obj = obj.isoformat()
     return obj
-    
+
 def date_default(obj):
     """default function for packing datetime objects in JSON."""
     if isinstance(obj, datetime):
-        return obj.strftime(ISO8601)
+        return obj.isoformat()
     else:
         raise TypeError("%r is not JSON serializable"%obj)
 
 
 # constants for identifying png/jpeg data
 PNG = b'\x89PNG\r\n\x1a\n'
+# front of PNG base64-encoded
+PNG64 = b'iVBORw0KG'
 JPEG = b'\xff\xd8'
+# front of JPEG base64-encoded
+JPEG64 = b'/9'
 
 def encode_images(format_dict):
     """b64-encodes images in a displaypub format dict
-    
+
     Perhaps this should be handled in json_clean itself?
-    
+
     Parameters
     ----------
-    
+
     format_dict : dict
         A dictionary of display data keyed by mime-type
-    
+
     Returns
     -------
-    
+
     format_dict : dict
         A copy of the same dictionary,
         but binary image data ('image/png' or 'image/jpeg')
         is base64-encoded.
-    
+
     """
     encoded = format_dict.copy()
+
     pngdata = format_dict.get('image/png')
-    if isinstance(pngdata, bytes) and pngdata[:8] == PNG:
-        encoded['image/png'] = encodestring(pngdata).decode('ascii')
+    if isinstance(pngdata, bytes):
+        # make sure we don't double-encode
+        if not pngdata.startswith(PNG64):
+            pngdata = encodebytes(pngdata)
+        encoded['image/png'] = pngdata.decode('ascii')
+
     jpegdata = format_dict.get('image/jpeg')
-    if isinstance(jpegdata, bytes) and jpegdata[:2] == JPEG:
-        encoded['image/jpeg'] = encodestring(jpegdata).decode('ascii')
+    if isinstance(jpegdata, bytes):
+        # make sure we don't double-encode
+        if not jpegdata.startswith(JPEG64):
+            jpegdata = encodebytes(jpegdata)
+        encoded['image/jpeg'] = jpegdata.decode('ascii')
+
     return encoded
 
 
 def json_clean(obj):
     """Clean an object to ensure it's safe to encode in JSON.
-    
+
     Atomic, immutable objects are returned unmodified.  Sets and tuples are
     converted to lists, lists are copied and dicts are also copied.
 
@@ -142,7 +176,7 @@ def json_clean(obj):
     Returns
     -------
     out : object
-    
+
       A version of the input which will not cause an encoding error when
       encoded as JSON.  Note that this function does not *encode* its inputs,
       it simply sanitizes it so that there will be no encoding errors later.
@@ -151,7 +185,7 @@ def json_clean(obj):
     --------
     >>> json_clean(4)
     4
-    >>> json_clean(range(10))
+    >>> json_clean(list(range(10)))
     [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
     >>> sorted(json_clean(dict(x=1, y=2)).items())
     [('x', 1), ('y', 2)]
@@ -162,27 +196,27 @@ def json_clean(obj):
     """
     # types that are 'atomic' and ok in json as-is.  bool doesn't need to be
     # listed explicitly because bools pass as int instances
-    atomic_ok = (unicode, int, types.NoneType)
-    
+    atomic_ok = (unicode_type, int, type(None))
+
     # containers that we need to convert into lists
     container_to_list = (tuple, set, types.GeneratorType)
-    
+
     if isinstance(obj, float):
         # cast out-of-range floats to their reprs
         if math.isnan(obj) or math.isinf(obj):
             return repr(obj)
         return obj
-    
+
     if isinstance(obj, atomic_ok):
         return obj
-    
+
     if isinstance(obj, bytes):
         return obj.decode(DEFAULT_ENCODING, 'replace')
-    
+
     if isinstance(obj, container_to_list) or (
         hasattr(obj, '__iter__') and hasattr(obj, next_attr_name)):
         obj = list(obj)
-        
+
     if isinstance(obj, list):
         return [json_clean(x) for x in obj]
 
@@ -197,7 +231,7 @@ def json_clean(obj):
                              'key collision would lead to dropped values')
         # If all OK, proceed by making the new dict that will be json-safe
         out = {}
-        for k,v in obj.iteritems():
+        for k,v in iteritems(obj):
             out[str(k)] = json_clean(v)
         return out
 

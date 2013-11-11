@@ -37,9 +37,13 @@ def wait(n):
     time.sleep(n)
     return n
 
-mixed = map(str, range(10))
-completed = map(str, range(0,10,2))
-failed = map(str, range(1,10,2))
+@pmod.interactive
+def func(x):
+    return x*x
+
+mixed = list(map(str, range(10)))
+completed = list(map(str, range(0,10,2)))
+failed = list(map(str, range(1,10,2)))
 
 class DependencyTest(ClusterTestCase):
     
@@ -70,12 +74,12 @@ class DependencyTest(ClusterTestCase):
     def test_require_imports(self):
         """test that @require imports names"""
         @self.cancan
-        @pmod.require('urllib')
+        @pmod.require('base64')
         @interactive
-        def encode(dikt):
-            return urllib.urlencode(dikt)
+        def encode(arg):
+            return base64.b64encode(arg)
         # must pass through canning to properly connect namespaces
-        self.assertEqual(encode(dict(a=5)), 'a=5')
+        self.assertEqual(encode(b'foo'), b'Zm9v')
     
     def test_success_only(self):
         dep = pmod.Dependency(mixed, success=True, failure=False)
@@ -104,3 +108,29 @@ class DependencyTest(ClusterTestCase):
         dep.all=False
         self.assertUnmet(dep)
         self.assertUnreachable(dep)
+    
+    def test_require_function(self):
+        
+        @pmod.interactive
+        def bar(a):
+            return func(a)
+
+        @pmod.require(func)
+        @pmod.interactive
+        def bar2(a):
+            return func(a)
+        
+        self.client[:].clear()
+        self.assertRaisesRemote(NameError, self.view.apply_sync, bar, 5)
+        ar = self.view.apply_async(bar2, 5)
+        self.assertEqual(ar.get(5), func(5))
+
+    def test_require_object(self):
+        
+        @pmod.require(foo=func)
+        @pmod.interactive
+        def bar(a):
+            return foo(a)
+
+        ar = self.view.apply_async(bar, 5)
+        self.assertEqual(ar.get(5), func(5))

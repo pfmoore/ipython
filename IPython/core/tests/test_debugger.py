@@ -1,5 +1,6 @@
 """Tests for debugging machinery.
 """
+from __future__ import print_function
 #-----------------------------------------------------------------------------
 #  Copyright (c) 2012, The IPython Development Team.
 #
@@ -36,7 +37,7 @@ class _FakeInput(object):
 
     def readline(self):
         line = next(self.lines)
-        print line
+        print(line)
         return line+'\n'
 
 class PdbTestInput(object):
@@ -57,7 +58,10 @@ class PdbTestInput(object):
 #-----------------------------------------------------------------------------
 
 def test_longer_repr():
-    from repr import repr as trepr
+    try:
+        from reprlib import repr as trepr  # Py 3
+    except ImportError:
+        from repr import repr as trepr  # Py 2
     
     a = '1234567890'* 7
     ar = "'1234567890123456789012345678901234567890123456789012345678901234567890'"
@@ -84,6 +88,8 @@ def test_ipdb_magics():
     >>> def example_function(x, y, z="hello"):
     ...     """Docstring for example_function."""
     ...     pass
+
+    >>> old_trace = sys.gettrace()
 
     Create a function which triggers ipdb.
 
@@ -115,9 +121,37 @@ def test_ipdb_magics():
     ipdb> pinfo a
     Type:       ExampleClass
     String Form:ExampleClass()
-    Namespace:  Locals
-    File:       ...
+    Namespace:  Local...
     Docstring:  Docstring for ExampleClass.
     Constructor Docstring:Docstring for ExampleClass.__init__
     ipdb> continue
+    
+    Restore previous trace function, e.g. for coverage.py    
+    
+    >>> sys.settrace(old_trace)
+    '''
+
+def test_ipdb_magics2():
+    '''Test ipdb with a very short function.
+    
+    >>> old_trace = sys.gettrace()
+
+    >>> def bar():
+    ...     pass
+
+    Run ipdb.
+
+    >>> with PdbTestInput([
+    ...    'continue',
+    ... ]):
+    ...     debugger.Pdb().runcall(bar)
+    > <doctest ...>(2)bar()
+          1 def bar():
+    ----> 2    pass
+    <BLANKLINE>
+    ipdb> continue
+    
+    Restore previous trace function, e.g. for coverage.py    
+    
+    >>> sys.settrace(old_trace)
     '''

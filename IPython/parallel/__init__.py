@@ -21,12 +21,9 @@ import warnings
 import zmq
 
 from IPython.config.configurable import MultipleInstanceError
-from IPython.zmq import check_for_zmq
+from IPython.utils.zmqrelated import check_for_zmq
 
-if os.name == 'nt':
-    min_pyzmq = '2.1.7'
-else:
-    min_pyzmq = '2.1.4'
+min_pyzmq = '2.1.11'
 
 check_for_zmq(min_pyzmq, 'IPython.parallel')
 
@@ -53,7 +50,7 @@ def bind_kernel(**kwargs):
     
     This function returns immediately.
     """
-    from IPython.zmq.ipkernel import IPKernelApp
+    from IPython.kernel.zmq.kernelapp import IPKernelApp
     from IPython.parallel.apps.ipengineapp import IPEngineApp
     
     # first check for IPKernelApp, in which case this should be a no-op

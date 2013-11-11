@@ -1,10 +1,11 @@
-"""IPython.kernel has been replaced by IPython.parallel.
+"""IPython kernels and associated utilities"""
 
-The previous version of IPython's parallel library was located at this
-location (IPython.kernel). It has been moved to the IPython.parallel
-subpackage and has been refactored to use zeromq/pyzmq instead of twisted.
+# just for friendlier zmq version check
+from . import zmq
 
-Please see INSERT URL for further details.
-"""
-
-raise ImportError(__doc__)
+from .connect import *
+from .launcher import *
+from .client import KernelClient
+from .manager import KernelManager
+from .blocking import BlockingKernelClient
+from .multikernelmanager import MultiKernelManager

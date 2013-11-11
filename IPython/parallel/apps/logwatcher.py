@@ -26,6 +26,7 @@ import zmq
 from zmq.eventloop import ioloop, zmqstream
 
 from IPython.config.configurable import LoggingConfigurable
+from IPython.utils.localinterfaces import localhost
 from IPython.utils.traitlets import Int, Unicode, Instance, List
 
 #-----------------------------------------------------------------------------
@@ -43,8 +44,10 @@ class LogWatcher(LoggingConfigurable):
     # configurables
     topics = List([''], config=True,
         help="The ZMQ topics to subscribe to. Default is to subscribe to all messages")
-    url = Unicode('tcp://127.0.0.1:20202', config=True,
+    url = Unicode(config=True,
         help="ZMQ url on which to listen for log messages")
+    def _url_default(self):
+        return 'tcp://%s:20202' % localhost()
     
     # internals
     stream = Instance('zmq.eventloop.zmqstream.ZMQStream')

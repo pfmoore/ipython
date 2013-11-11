@@ -51,6 +51,7 @@ from datetime import datetime
 
 from IPython.config.configurable import LoggingConfigurable
 
+from IPython.utils.py3compat import iteritems, itervalues
 from IPython.utils.traitlets import Dict, Unicode, Integer, Float
 
 filters = {
@@ -74,7 +75,7 @@ class CompositeFilter(object):
     def __init__(self, dikt):
         self.tests = []
         self.values = []
-        for key, value in dikt.iteritems():
+        for key, value in iteritems(dikt):
             self.tests.append(filters[key])
             self.values.append(value)
 
@@ -103,11 +104,12 @@ class DictDB(BaseDB):
     _culled_ids = set() # set of ids which have been culled
     _buffer_bytes = Integer(0) # running total of the bytes in the DB
     
-    size_limit = Integer(1024*1024, config=True,
+    size_limit = Integer(1024**3, config=True,
         help="""The maximum total size (in bytes) of the buffers stored in the db
         
         When the db exceeds this size, the oldest records will be culled until
         the total size is under size_limit * (1-cull_fraction).
+        default: 1 GB
         """
     )
     record_limit = Integer(1024, config=True,
@@ -130,7 +132,7 @@ class DictDB(BaseDB):
 
     def _match_one(self, rec, tests):
         """Check if a specific record matches tests."""
-        for key,test in tests.iteritems():
+        for key,test in iteritems(tests):
             if not test(rec.get(key, None)):
                 return False
         return True
@@ -139,13 +141,13 @@ class DictDB(BaseDB):
         """Find all the matches for a check dict."""
         matches = []
         tests = {}
-        for k,v in check.iteritems():
+        for k,v in iteritems(check):
             if isinstance(v, dict):
                 tests[k] = CompositeFilter(v)
             else:
                 tests[k] = lambda o: o==v
 
-        for rec in self._records.itervalues():
+        for rec in itervalues(self._records):
             if self._match_one(rec, tests):
                 matches.append(copy(rec))
         return matches
@@ -266,6 +268,10 @@ class DictDB(BaseDB):
     def get_history(self):
         """get all msg_ids, ordered by time submitted."""
         msg_ids = self._records.keys()
+        # Remove any that do not have a submitted timestamp.
+        # This is extremely unlikely to happen,
+        # but it seems to come up in some tests on VMs.
+        msg_ids = [ m for m in msg_ids if self._records[m]['submitted'] is not None ]
         return sorted(msg_ids, key=lambda m: self._records[m]['submitted'])
 
 

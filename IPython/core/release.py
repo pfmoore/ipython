@@ -19,24 +19,27 @@ name = 'ipython'
 # IPython version information.  An empty _version_extra corresponds to a full
 # release.  'dev' as a _version_extra string means this is a development
 # version
-_version_major = 0
-_version_minor = 14
-_version_micro = 0  # use 0 for first of series, number for 1 and above
+_version_major = 2
+_version_minor = 0
+_version_patch = 0
 _version_extra = 'dev'
-#_version_extra = 'rc1'
+# _version_extra = 'rc1'
 # _version_extra = ''  # Uncomment this for full releases
 
+codename = 'Work in Progress'
+
 # Construct full version string from these.
-_ver = [_version_major, _version_minor]
-if _version_micro:
-    _ver.append(_version_micro)
-if _version_extra:
-    _ver.append(_version_extra)
+_ver = [_version_major, _version_minor, _version_patch]
 
 __version__ = '.'.join(map(str, _ver))
+if _version_extra:
+    __version__ = __version__ + '-' + _version_extra
 
 version = __version__  # backwards compatibility name
-version_info = (_version_major, _version_minor, _version_micro, _version_extra)
+version_info = (_version_major, _version_minor, _version_patch, _version_extra)
+
+# Change this when incrementing the kernel protocol version
+kernel_protocol_version_info = (4, 0)
 
 description = "IPython: Productive Interactive Computing"
 
@@ -127,7 +130,7 @@ url = 'http://ipython.org'
 
 download_url = 'https://github.com/ipython/ipython/downloads'
 
-platforms = ['Linux','Mac OSX','Windows XP/2000/NT/Vista/7']
+platforms = ['Linux','Mac OSX','Windows XP/Vista/7/8']
 
 keywords = ['Interactive','Interpreter','Shell','Parallel','Distributed',
             'Web-based computing', 'Qt console', 'Embedding']
@@ -138,11 +141,8 @@ classifiers = [
     'License :: OSI Approved :: BSD License',
     'Programming Language :: Python',
     'Programming Language :: Python :: 2',
-    'Programming Language :: Python :: 2.6',
     'Programming Language :: Python :: 2.7',
     'Programming Language :: Python :: 3',
-    'Programming Language :: Python :: 3.1',
-    'Programming Language :: Python :: 3.2',
     'Topic :: System :: Distributed Computing',
     'Topic :: System :: Shells'
     ]

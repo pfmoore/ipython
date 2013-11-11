@@ -18,6 +18,7 @@ import nose.tools as nt
 
 # Our own imports
 from IPython.lib import pretty
+from IPython.testing.decorators import skip_without
 
 #-----------------------------------------------------------------------------
 # Classes and functions
@@ -52,6 +53,32 @@ class Dummy1(object):
 class Dummy2(Dummy1):
     _repr_pretty_ = None
 
+class NoModule(object):
+    pass
+
+NoModule.__module__ = None
+
+class Breaking(object):
+    def _repr_pretty_(self, p, cycle):
+        with p.group(4,"TG: ",":"):
+            p.text("Breaking(")
+            p.break_()
+            p.text(")")
+
+class BreakingRepr(object):
+    def __repr__(self):
+        return "Breaking(\n)"
+
+class BreakingReprParent(object):
+    def _repr_pretty_(self, p, cycle):
+        with p.group(4,"TG: ",":"):
+            p.pretty(BreakingRepr())
+
+class BadRepr(object):
+    
+    def __repr__(self):
+        return 1/0
+
 
 def test_indentation():
     """Test correct indentation in groups"""
@@ -82,3 +109,76 @@ def test_callability_checking():
     expectedoutput = "Dummy1(...)"
 
     nt.assert_equal(gotoutput, expectedoutput)
+
+
+def test_sets():
+    """
+    Test that set and frozenset use Python 3 formatting.
+    """
+    objects = [set(), frozenset(), set([1]), frozenset([1]), set([1, 2]),
+        frozenset([1, 2]), set([-1, -2, -3])]
+    expected = ['set()', 'frozenset()', '{1}', 'frozenset({1})', '{1, 2}',
+        'frozenset({1, 2})', '{-3, -2, -1}']
+    for obj, expected_output in zip(objects, expected):
+        got_output = pretty.pretty(obj)
+        yield nt.assert_equal, got_output, expected_output
+
+
+@skip_without('xxlimited')
+def test_pprint_heap_allocated_type():
+    """
+    Test that pprint works for heap allocated types.
+    """
+    import xxlimited
+    output = pretty.pretty(xxlimited.Null)
+    nt.assert_equal(output, 'xxlimited.Null')
+
+def test_pprint_nomod():
+    """
+    Test that pprint works for classes with no __module__.
+    """
+    output = pretty.pretty(NoModule)
+    nt.assert_equal(output, 'NoModule')
+    
+def test_pprint_break():
+    """
+    Test that p.break_ produces expected output
+    """
+    output = pretty.pretty(Breaking())
+    expected = "TG: Breaking(\n    ):"
+    nt.assert_equal(output, expected)
+
+def test_pprint_break_repr():
+    """
+    Test that p.break_ is used in repr
+    """
+    output = pretty.pretty(BreakingReprParent())
+    expected = "TG: Breaking(\n    ):"
+    nt.assert_equal(output, expected)
+
+def test_bad_repr():
+    """Don't raise, even when repr fails"""
+    output = pretty.pretty(BadRepr())
+    nt.assert_in("failed", output)
+    nt.assert_in("at 0x", output)
+    nt.assert_in("test_pretty", output)
+
+class BadException(Exception):
+    def __str__(self):
+        return -1
+
+class ReallyBadRepr(object):
+    __module__ = 1
+    @property
+    def __class__(self):
+        raise ValueError("I am horrible")
+    
+    def __repr__(self):
+        raise BadException()
+
+def test_really_bad_repr():
+    output = pretty.pretty(ReallyBadRepr())
+    nt.assert_in("failed", output)
+    nt.assert_in("BadException: unknown", output)
+    nt.assert_in("unknown type", output)
+    

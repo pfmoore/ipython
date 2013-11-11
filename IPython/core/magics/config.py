@@ -1,5 +1,6 @@
 """Implementation of configuration-related magic functions.
 """
+from __future__ import print_function
 #-----------------------------------------------------------------------------
 #  Copyright (c) 2012 The IPython Development Team.
 #
@@ -24,6 +25,7 @@ from IPython.utils.warn import error
 # Magic implementation classes
 #-----------------------------------------------------------------------------
 
+reg = re.compile('^\w+\.\w+$')
 @magics_class
 class ConfigMagics(Magics):
 
@@ -115,9 +117,9 @@ class ConfigMagics(Magics):
         line = s.strip()
         if not line:
             # print available configurable names
-            print "Available objects for config:"
+            print("Available objects for config:")
             for name in classnames:
-                print "    ", name
+                print("    ", name)
             return
         elif line in classnames:
             # `%config TerminalInteractiveShell` will print trait info for
@@ -127,17 +129,28 @@ class ConfigMagics(Magics):
             help = cls.class_get_help(c)
             # strip leading '--' from cl-args:
             help = re.sub(re.compile(r'^--', re.MULTILINE), '', help)
-            print help
+            print(help)
             return
+        elif reg.match(line):
+            cls, attr = line.split('.')
+            return getattr(configurables[classnames.index(cls)],attr)
         elif '=' not in line:
-            raise UsageError("Invalid config statement: %r, "
-                             "should be Class.trait = value" % line)
+            msg = "Invalid config statement: %r, "\
+                  "should be `Class.trait = value`."
+            
+            ll = line.lower()
+            for classname in classnames:
+                if ll == classname.lower():
+                    msg = msg + '\nDid you mean %s (note the case)?' % classname
+                    break
+
+            raise UsageError( msg % line)
 
         # otherwise, assume we are setting configurables.
         # leave quotes on args when splitting, because we want
         # unquoted args to eval in user_ns
         cfg = Config()
-        exec "cfg."+line in locals(), self.shell.user_ns
+        exec("cfg."+line, locals(), self.shell.user_ns)
 
         for configurable in configurables:
             try:

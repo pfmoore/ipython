@@ -18,6 +18,8 @@ from IPython.core import completer
 from IPython.external.decorators import knownfailureif
 from IPython.utils.tempdir import TemporaryDirectory
 from IPython.utils.generics import complete_object
+from IPython.utils import py3compat
+from IPython.utils.py3compat import string_types, unicode_type
 
 #-----------------------------------------------------------------------------
 # Test functions
@@ -64,7 +66,7 @@ def check_line_split(splitter, test_specs):
 
 
 def test_line_split():
-    """Basice line splitter test with default specs."""
+    """Basic line splitter test with default specs."""
     sp = completer.CompletionSplitter()
     # The format of the test specs is: part1, part2, expected answer.  Parts 1
     # and 2 are joined into the 'line' sent to the splitter, as if the cursor
@@ -83,7 +85,7 @@ def test_line_split():
     check_line_split(sp, t)
     # Ensure splitting works OK with unicode by re-running the tests with
     # all inputs turned into unicode
-    check_line_split(sp, [ map(unicode, p) for p in t] )
+    check_line_split(sp, [ map(unicode_type, p) for p in t] )
 
 
 def test_custom_completion_error():
@@ -104,13 +106,13 @@ def test_unicode_completions():
     # Some strings that trigger different types of completion.  Check them both
     # in str and unicode forms
     s = ['ru', '%ru', 'cd /', 'floa', 'float(x)/']
-    for t in s + map(unicode, s):
+    for t in s + list(map(unicode_type, s)):
         # We don't need to check exact completion values (they may change
         # depending on the state of the namespace, but at least no exceptions
         # should be thrown and the return value should be a pair of text, list
         # values.
         text, matches = ip.complete(t)
-        nt.assert_true(isinstance(text, basestring))
+        nt.assert_true(isinstance(text, string_types))
         nt.assert_true(isinstance(matches, list))
 
 
@@ -158,7 +160,7 @@ def test_abspath_file_completions():
     ip = get_ipython()
     with TemporaryDirectory() as tmpdir:
         prefix = os.path.join(tmpdir, 'foo')
-        suffixes = map(str, [1,2])
+        suffixes = ['1', '2']
         names = [prefix+s for s in suffixes]
         for n in names:
             open(n, 'w').close()
@@ -176,12 +178,12 @@ def test_abspath_file_completions():
 
 def test_local_file_completions():
     ip = get_ipython()
-    cwd = os.getcwdu()
+    cwd = py3compat.getcwd()
     try:
         with TemporaryDirectory() as tmpdir:
             os.chdir(tmpdir)
             prefix = './foo'
-            suffixes = map(str, [1,2])
+            suffixes = ['1', '2']
             names = [prefix+s for s in suffixes]
             for n in names:
                 open(n, 'w').close()
@@ -205,7 +207,7 @@ def test_greedy_completions():
     greedy_original = ip.Completer.greedy
     try:
         ip.Completer.greedy = False
-        ip.ex('a=range(5)')
+        ip.ex('a=list(range(5))')
         _,c = ip.complete('.',line='a[0].')
         nt.assert_false('a[0].real' in c,
                         "Shouldn't have completed on a[0]: %s"%c)
@@ -226,18 +228,18 @@ def test_omit__names():
     cfg.IPCompleter.omit__names = 0
     c.update_config(cfg)
     s,matches = c.complete('ip.')
-    nt.assert_true('ip.__str__' in matches)
-    nt.assert_true('ip._hidden_attr' in matches)
+    nt.assert_in('ip.__str__', matches)
+    nt.assert_in('ip._hidden_attr', matches)
     cfg.IPCompleter.omit__names = 1
     c.update_config(cfg)
     s,matches = c.complete('ip.')
-    nt.assert_false('ip.__str__' in matches)
-    nt.assert_true('ip._hidden_attr' in matches)
+    nt.assert_not_in('ip.__str__', matches)
+    nt.assert_in('ip._hidden_attr', matches)
     cfg.IPCompleter.omit__names = 2
     c.update_config(cfg)
     s,matches = c.complete('ip.')
-    nt.assert_false('ip.__str__' in matches)
-    nt.assert_false('ip._hidden_attr' in matches)
+    nt.assert_not_in('ip.__str__', matches)
+    nt.assert_not_in('ip._hidden_attr', matches)
     del ip._hidden_attr
 
 
@@ -250,7 +252,7 @@ def test_limit_to__all__False_ok():
     cfg.IPCompleter.limit_to__all__ = False
     c.update_config(cfg)
     s, matches = c.complete('d.')
-    nt.assert_true('d.x' in matches) 
+    nt.assert_in('d.x', matches)
 
 
 def test_limit_to__all__True_ok():
@@ -263,8 +265,8 @@ def test_limit_to__all__True_ok():
     cfg.IPCompleter.limit_to__all__ = True
     c.update_config(cfg)
     s, matches = c.complete('d.')
-    nt.assert_true('d.z' in matches) 
-    nt.assert_false('d.x' in matches)
+    nt.assert_in('d.z', matches)
+    nt.assert_not_in('d.x', matches)
 
 
 def test_get__all__entries_ok():
@@ -288,11 +290,30 @@ def test_func_kw_completions():
     s, matches = c.complete(None, 'myfunc(1,b')
     nt.assert_in('b=', matches)
     # Simulate completing with cursor right after b (pos==10):
-    s, matches = c.complete(None,'myfunc(1,b)', 10)
+    s, matches = c.complete(None, 'myfunc(1,b)', 10)
     nt.assert_in('b=', matches)
-    s, matches = c.complete(None,'myfunc(a="escaped\\")string",b')
+    s, matches = c.complete(None, 'myfunc(a="escaped\\")string",b')
     nt.assert_in('b=', matches)
+    #builtin function
+    s, matches = c.complete(None, 'min(k, k')
+    nt.assert_in('key=', matches)
 
+
+def test_default_arguments_from_docstring():
+    doc = min.__doc__
+    ip = get_ipython()
+    c = ip.Completer
+    kwd = c._default_arguments_from_docstring(
+        'min(iterable[, key=func]) -> value')
+    nt.assert_equal(kwd, ['key'])
+    #with cython type etc
+    kwd = c._default_arguments_from_docstring(
+        'Minuit.migrad(self, int ncall=10000, resume=True, int nsplit=1)\n')
+    nt.assert_equal(kwd, ['ncall', 'resume', 'nsplit'])
+    #white spaces
+    kwd = c._default_arguments_from_docstring(
+        '\n Minuit.migrad(self, int ncall=10000, resume=True, int nsplit=1)\n')
+    nt.assert_equal(kwd, ['ncall', 'resume', 'nsplit'])
 
 def test_line_magics():
     ip = get_ipython()
@@ -342,4 +363,32 @@ def test_line_cell_magics():
     s, matches = c.complete(None, '%%_bar_ce')
     nt.assert_not_in('%_bar_cellm', matches)
     nt.assert_in('%%_bar_cellm', matches)
+
+
+def test_magic_completion_order():
+
+    ip = get_ipython()
+    c = ip.Completer
+
+    # Test ordering of magics and non-magics with the same name
+    # We want the non-magic first
+
+    # Before importing matplotlib, there should only be one option:
+
+    text, matches = c.complete('mat')
+    nt.assert_equal(matches, ["%matplotlib"])
+
+
+    ip.run_cell("matplotlib = 1")  # introduce name into namespace
+
+    # After the import, there should be two options, ordered like this:
+    text, matches = c.complete('mat')
+    nt.assert_equal(matches, ["matplotlib", "%matplotlib"])
+
+
+    ip.run_cell("timeit = 1")  # define a user variable called 'timeit'
+
+    # Order of user variable and line and cell magics with same name:
+    text, matches = c.complete('timeit')
+    nt.assert_equal(matches, ["timeit", "%timeit","%%timeit"])
 

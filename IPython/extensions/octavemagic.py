@@ -11,8 +11,12 @@ Magics for interacting with Octave via oct2py.
   The ``oct2py`` module needs to be installed separately and
   can be obtained using ``easy_install`` or ``pip``.
 
+  You will also need a working copy of GNU Octave.
+
 Usage
 =====
+
+To enable the magics below, execute ``%load_ext octavemagic``.
 
 ``%octave``
 
@@ -258,7 +262,7 @@ class OctaveMagics(Magics):
                 self._oct.put(input, val)
 
         # generate plots in a temporary directory
-        plot_dir = tempfile.mkdtemp()
+        plot_dir = tempfile.mkdtemp().replace('\\', '/')
         if args.size is not None:
             size = args.size
         else:
@@ -362,10 +366,6 @@ __doc__ = __doc__.format(
     )
 
 
-_loaded = False
 def load_ipython_extension(ip):
     """Load the extension in IPython."""
-    global _loaded
-    if not _loaded:
-        ip.register_magics(OctaveMagics)
-        _loaded = True
+    ip.register_magics(OctaveMagics)

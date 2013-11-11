@@ -18,8 +18,6 @@ Authors:
 # Imports
 #-----------------------------------------------------------------------------
 
-from IPython.utils.data import list2dict2
-
 __all__ = ['Struct']
 
 #-----------------------------------------------------------------------------
@@ -80,7 +78,7 @@ class Struct(dict):
         >>> try:
         ...     s['b'] = 20
         ... except KeyError:
-        ...     print 'this is not allowed'
+        ...     print('this is not allowed')
         ...
         this is not allowed
         """
@@ -105,7 +103,7 @@ class Struct(dict):
         >>> try:
         ...     s.get = 10
         ... except AttributeError:
-        ...     print "you can't set a class member"
+        ...     print("you can't set a class member")
         ...
         you can't set a class member
         """
@@ -141,7 +139,7 @@ class Struct(dict):
         >>> try:
         ...     s.b
         ... except AttributeError:
-        ...     print "I don't have that key"
+        ...     print("I don't have that key")
         ...
         I don't have that key
         """
@@ -370,7 +368,7 @@ class Struct(dict):
         add_s    = lambda old,new: old + ' ' + new
 
         # default policy is to keep current keys when there's a conflict
-        conflict_solve = list2dict2(self.keys(), default = preserve)
+        conflict_solve = dict.fromkeys(self, preserve)
 
         # the conflict_solve dictionary is given by the user 'inverted': we
         # need a name-function mapping, it comes as a function -> names

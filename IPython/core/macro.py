@@ -8,7 +8,6 @@
 #*****************************************************************************
 
 import re
-import sys
 
 from IPython.utils import py3compat
 from IPython.utils.encoding import DEFAULT_ENCODING
@@ -20,8 +19,6 @@ class Macro(object):
 
     Macro is just a callable that executes a string of IPython
     input when called.
-    
-    Args to macro are available in _margv list if you need them.
     """
 
     def __init__(self,code):
@@ -55,6 +52,6 @@ class Macro(object):
     def __add__(self, other):
         if isinstance(other, Macro):
             return Macro(self.value + other.value)
-        elif isinstance(other, basestring):
+        elif isinstance(other, py3compat.string_types):
             return Macro(self.value + other)
         raise TypeError

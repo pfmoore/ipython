@@ -20,7 +20,6 @@ from __future__ import print_function
 #-----------------------------------------------------------------------------
 
 # stdlib
-import __builtin__ as builtin_mod
 import os
 import sys
 
@@ -30,7 +29,8 @@ from . import tools
 from IPython.core import page
 from IPython.utils import io
 from IPython.utils import py3compat
-from IPython.frontend.terminal.interactiveshell import TerminalInteractiveShell
+from IPython.utils.py3compat import builtin_mod
+from IPython.terminal.interactiveshell import TerminalInteractiveShell
 
 #-----------------------------------------------------------------------------
 # Functions

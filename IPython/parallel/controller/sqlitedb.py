@@ -13,7 +13,10 @@ Authors:
 
 import json
 import os
-import cPickle as pickle
+try:
+    import cPickle as pickle
+except ImportError:
+    import pickle
 from datetime import datetime
 
 try:
@@ -26,6 +29,7 @@ from zmq.eventloop import ioloop
 from IPython.utils.traitlets import Unicode, Instance, List, Dict
 from .dictdb import BaseDB
 from IPython.utils.jsonutil import date_default, extract_dates, squash_dates
+from IPython.utils.py3compat import iteritems
 
 #-----------------------------------------------------------------------------
 # SQLite operators, adapters, and converters
@@ -72,7 +76,7 @@ def _adapt_bufs(bufs):
     # this is *horrible*
     # copy buffers into single list and pickle it:
     if bufs and isinstance(bufs[0], (bytes, buffer)):
-        return sqlite3.Binary(pickle.dumps(map(bytes, bufs),-1))
+        return sqlite3.Binary(pickle.dumps(list(map(bytes, bufs)),-1))
     elif bufs:
         return bufs
     else:
@@ -96,7 +100,7 @@ class SQLiteDB(BaseDB):
     location = Unicode('', config=True,
         help="""The directory containing the sqlite task database.  The default
         is to use the cluster_dir location.""")
-    table = Unicode("", config=True,
+    table = Unicode("ipython-tasks", config=True,
         help="""The SQLite Table to use for storing tasks for this session. If unspecified,
         a new table will be created with the Hub's IDENT.  Specifying the table will result
         in tasks from previous sessions being available via Clients' db_query and
@@ -195,7 +199,7 @@ class SQLiteDB(BaseDB):
 
         If a bad (old) table does exist, return False
         """
-        cursor = self._db.execute("PRAGMA table_info(%s)"%self.table)
+        cursor = self._db.execute("PRAGMA table_info('%s')"%self.table)
         lines = cursor.fetchall()
         if not lines:
             # table does not exist
@@ -241,7 +245,7 @@ class SQLiteDB(BaseDB):
             )
             previous_table = self.table
 
-        self._db.execute("""CREATE TABLE IF NOT EXISTS %s
+        self._db.execute("""CREATE TABLE IF NOT EXISTS '%s'
                 (msg_id text PRIMARY KEY,
                 header dict text,
                 metadata dict text,
@@ -292,9 +296,9 @@ class SQLiteDB(BaseDB):
         if skeys:
             raise KeyError("Illegal testing key(s): %s"%skeys)
 
-        for name,sub_check in check.iteritems():
+        for name,sub_check in iteritems(check):
             if isinstance(sub_check, dict):
-                for test,value in sub_check.iteritems():
+                for test,value in iteritems(sub_check):
                     try:
                         op = operators[test]
                     except KeyError:
@@ -333,12 +337,12 @@ class SQLiteDB(BaseDB):
         d['msg_id'] = msg_id
         line = self._dict_to_list(d)
         tups = '(%s)'%(','.join(['?']*len(line)))
-        self._db.execute("INSERT INTO %s VALUES %s"%(self.table, tups), line)
+        self._db.execute("INSERT INTO '%s' VALUES %s"%(self.table, tups), line)
         # self._db.commit()
 
     def get_record(self, msg_id):
         """Get a specific Task Record, by msg_id."""
-        cursor = self._db.execute("""SELECT * FROM %s WHERE msg_id==?"""%self.table, (msg_id,))
+        cursor = self._db.execute("""SELECT * FROM '%s' WHERE msg_id==?"""%self.table, (msg_id,))
         line = cursor.fetchone()
         if line is None:
             raise KeyError("No such msg: %r"%msg_id)
@@ -346,7 +350,7 @@ class SQLiteDB(BaseDB):
 
     def update_record(self, msg_id, rec):
         """Update the data in an existing record."""
-        query = "UPDATE %s SET "%self.table
+        query = "UPDATE '%s' SET "%self.table
         sets = []
         keys = sorted(rec.keys())
         values = []
@@ -361,13 +365,13 @@ class SQLiteDB(BaseDB):
 
     def drop_record(self, msg_id):
         """Remove a record from the DB."""
-        self._db.execute("""DELETE FROM %s WHERE msg_id==?"""%self.table, (msg_id,))
+        self._db.execute("""DELETE FROM '%s' WHERE msg_id==?"""%self.table, (msg_id,))
         # self._db.commit()
 
     def drop_matching_records(self, check):
         """Remove a record from the DB."""
         expr,args = self._render_expression(check)
-        query = "DELETE FROM %s WHERE %s"%(self.table, expr)
+        query = "DELETE FROM '%s' WHERE %s"%(self.table, expr)
         self._db.execute(query,args)
         # self._db.commit()
 
@@ -399,7 +403,7 @@ class SQLiteDB(BaseDB):
         else:
             req = '*'
         expr,args = self._render_expression(check)
-        query = """SELECT %s FROM %s WHERE %s"""%(req, self.table, expr)
+        query = """SELECT %s FROM '%s' WHERE %s"""%(req, self.table, expr)
         cursor = self._db.execute(query, args)
         matches = cursor.fetchall()
         records = []
@@ -410,7 +414,7 @@ class SQLiteDB(BaseDB):
 
     def get_history(self):
         """get all msg_ids, ordered by time submitted."""
-        query = """SELECT msg_id FROM %s ORDER by submitted ASC"""%self.table
+        query = """SELECT msg_id FROM '%s' ORDER by submitted ASC"""%self.table
         cursor = self._db.execute(query)
         # will be a list of length 1 tuples
         return [ tup[0] for tup in cursor.fetchall()]

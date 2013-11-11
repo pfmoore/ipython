@@ -26,12 +26,10 @@ import sys
 
 # This check is also made in IPython/__init__, don't forget to update both when
 # changing Python version requirements.
-#~ if sys.version[0:3] < '2.6':
-    #~ error = """\
-#~ ERROR: 'IPython requires Python Version 2.6 or above.'
-#~ Exiting."""
-    #~ print >> sys.stderr, error
-    #~ sys.exit(1)
+if sys.version_info[:2] < (2,7):
+    error = "ERROR: IPython requires Python Version 2.7 or above."
+    print(error, file=sys.stderr)
+    sys.exit(1)
 
 PY3 = (sys.version_info[0] >= 3)
 
@@ -53,10 +51,6 @@ if os.path.exists('MANIFEST'): os.remove('MANIFEST')
 
 from distutils.core import setup
 
-# On Python 3, we need distribute (new setuptools) to do the 2to3 conversion
-if PY3:
-    import setuptools
-
 # Our own imports
 from setupbase import target_update
 
@@ -64,10 +58,20 @@ from setupbase import (
     setup_args,
     find_packages,
     find_package_data,
-    find_scripts,
+    find_entry_points,
+    build_scripts_entrypt,
     find_data_files,
     check_for_dependencies,
-    record_commit_info,
+    git_prebuild,
+    check_submodule_status,
+    update_submodules,
+    require_submodules,
+    UpdateSubmodules,
+    CompileCSS,
+    JavascriptVersion,
+    install_symlinked,
+    install_lib_symlink,
+    install_scripts_for_symlink,
 )
 from setupext import setupext
 
@@ -93,13 +97,10 @@ def cleanup():
 # Handle OS specific things
 #-------------------------------------------------------------------------------
 
-if os.name == 'posix':
-    os_name = 'posix'
-elif os.name in ['nt','dos']:
+if os.name in ('nt','dos'):
     os_name = 'windows'
 else:
-    print('Unsupported operating system:',os.name)
-    sys.exit(1)
+    os_name = os.name
 
 # Under Windows, 'sdist' has not been supported.  Now that the docs build with
 # Sphinx it might work, but let's not turn it on until someone confirms that it
@@ -109,12 +110,48 @@ else:
 #     sys.exit(1)
 
 #-------------------------------------------------------------------------------
+# Make sure we aren't trying to run without submodules
+#-------------------------------------------------------------------------------
+here = os.path.abspath(os.path.dirname(__file__))
+
+def require_clean_submodules():
+    """Check on git submodules before distutils can do anything
+
+    Since distutils cannot be trusted to update the tree
+    after everything has been set in motion,
+    this is not a distutils command.
+    """
+    # PACKAGERS: Add a return here to skip checks for git submodules
+    
+    # don't do anything if nothing is actually supposed to happen
+    for do_nothing in ('-h', '--help', '--help-commands', 'clean', 'submodule'):
+        if do_nothing in sys.argv:
+            return
+
+    status = check_submodule_status(here)
+
+    if status == "missing":
+        print("checking out submodules for the first time")
+        update_submodules(here)
+    elif status == "unclean":
+        print('\n'.join([
+            "Cannot build / install IPython with unclean submodules",
+            "Please update submodules with",
+            "    python setup.py submodule",
+            "or",
+            "    git submodule update",
+            "or commit any submodule changes you have made."
+        ]))
+        sys.exit(1)
+
+require_clean_submodules()
+
+#-------------------------------------------------------------------------------
 # Things related to the IPython documentation
 #-------------------------------------------------------------------------------
 
 # update the manuals when building a source dist
 if len(sys.argv) >= 2 and sys.argv[1] in ('sdist','bdist_rpm'):
-    import textwrap
 
     # List of things to be updated. Each entry is a triplet of args for
     # target_update()
@@ -148,10 +185,6 @@ if len(sys.argv) >= 2 and sys.argv[1] in ('sdist','bdist_rpm'):
                  ('docs/man/irunner.1.gz',
                   ['docs/man/irunner.1'],
                   'cd docs/man && gzip -9c irunner.1 > irunner.1.gz'),
-
-                 ('docs/man/pycolor.1.gz',
-                  ['docs/man/pycolor.1'],
-                  'cd docs/man && gzip -9c pycolor.1 > pycolor.1.gz'),
                  ]
 
 
@@ -177,7 +210,7 @@ from distutils.command.sdist import sdist
 from distutils.command.upload import upload
 
 class UploadWindowsInstallers(upload):
-    
+
     description = "Upload Windows installers to PyPI (only used from tools/release_windows.py)"
     user_options = upload.user_options + [
         ('files=', 'f', 'exe file (or glob) to upload')
@@ -190,15 +223,21 @@ class UploadWindowsInstallers(upload):
             version=meta.get_version()
         )
         self.files = os.path.join('dist', '%s.*.exe' % base)
-    
+
     def run(self):
         for dist_file in glob(self.files):
             self.upload_file('bdist_wininst', 'any', dist_file)
 
 setup_args['cmdclass'] = {
-    'build_py': record_commit_info('IPython'),
-    'sdist' : record_commit_info('IPython', sdist),
+    'build_py': git_prebuild('IPython'),
+    'sdist' : git_prebuild('IPython', sdist),
     'upload_wininst' : UploadWindowsInstallers,
+    'submodule' : UpdateSubmodules,
+    'css' : CompileCSS,
+    'symlink': install_symlinked,
+    'install_lib_symlink': install_lib_symlink,
+    'install_scripts_sym': install_scripts_for_symlink,
+    'jsversion' : JavascriptVersion,
 }
 
 #---------------------------------------------------------------------------
@@ -226,16 +265,29 @@ if len(needs_setuptools.intersection(sys.argv)) > 0:
 setuptools_extra_args = {}
 
 if 'setuptools' in sys.modules:
+    # setup.py develop should check for submodules
+    from setuptools.command.develop import develop
+    setup_args['cmdclass']['develop'] = require_submodules(develop)
+    
     setuptools_extra_args['zip_safe'] = False
-    setuptools_extra_args['entry_points'] = find_scripts(True)
+    setuptools_extra_args['entry_points'] = {'console_scripts':find_entry_points()}
     setup_args['extras_require'] = dict(
-        parallel = 'pyzmq>=2.1.4',
-        qtconsole = 'pygments',
-        zmq = 'pyzmq>=2.1.4',
+        parallel = 'pyzmq>=2.1.11',
+        qtconsole = ['pyzmq>=2.1.11', 'pygments'],
+        zmq = 'pyzmq>=2.1.11',
         doc = 'Sphinx>=0.3',
         test = 'nose>=0.10.1',
-        notebook = 'tornado>=2.0'
+        notebook = ['tornado>=3.1', 'pyzmq>=2.1.11', 'jinja2'],
+        nbconvert = ['pygments', 'jinja2', 'Sphinx>=0.3']
     )
+    everything = set()
+    for deps in setup_args['extras_require'].values():
+        if not isinstance(deps, list):
+            deps = [deps]
+        for dep in deps:
+            everything.add(dep)
+    setup_args['extras_require']['all'] = everything
+    
     requires = setup_args.setdefault('install_requires', [])
     setupext.display_status = False
     if not setupext.check_for_readline():
@@ -259,34 +311,22 @@ if 'setuptools' in sys.modules:
                ('sdist' in sys.argv or 'bdist_rpm' in sys.argv):
             print >> sys.stderr, "ERROR: bdist_wininst must be run alone. Exiting."
             sys.exit(1)
+        setup_args['data_files'].append(
+            ['Scripts', ('scripts/ipython.ico', 'scripts/ipython_nb.ico')])
         setup_args['scripts'] = [pjoin('scripts','ipython_win_post_install.py')]
         setup_args['options'] = {"bdist_wininst":
                                  {"install_script":
                                   "ipython_win_post_install.py"}}
-    
-    if PY3:
-        setuptools_extra_args['use_2to3'] = True
-        # we try to make a 2.6, 2.7, and 3.1 to 3.3 python compatible code
-        # so we explicitly disable some 2to3 fixes to be sure we aren't forgetting
-        # anything.
-        setuptools_extra_args['use_2to3_exclude_fixers'] = [
-                'lib2to3.fixes.fix_apply',
-                'lib2to3.fixes.fix_except',
-                'lib2to3.fixes.fix_has_key',
-                'lib2to3.fixes.fix_next',
-                'lib2to3.fixes.fix_repr',
-                'lib2to3.fixes.fix_tuple_params',
-                ]
-        from setuptools.command.build_py import build_py
-        setup_args['cmdclass'] = {'build_py': record_commit_info('IPython', build_cmd=build_py)}
-        setuptools_extra_args['entry_points'] = find_scripts(True, suffix='3')
-        setuptools._dont_write_bytecode = True
+
 else:
     # If we are running without setuptools, call this function which will
     # check for dependencies an inform the user what is needed.  This is
     # just to make life easy for users.
     check_for_dependencies()
-    setup_args['scripts'] = find_scripts(False)
+    # scripts has to be a non-empty list, or install_scripts isn't called
+    setup_args['scripts'] = [e.split('=')[0].strip() for e in find_entry_points()]
+
+    setup_args['cmdclass']['build_scripts'] = build_scripts_entrypt
 
 #---------------------------------------------------------------------------
 # Do the actual setup now

@@ -1,3 +1,4 @@
+# coding: utf-8
 """
 Tests for IPython.config.application.Application
 
@@ -18,7 +19,10 @@ Authors:
 #-----------------------------------------------------------------------------
 
 import logging
+from io import StringIO
 from unittest import TestCase
+
+import nose.tools as nt
 
 from IPython.config.configurable import Configurable
 from IPython.config.loader import Config
@@ -28,7 +32,7 @@ from IPython.config.application import (
 )
 
 from IPython.utils.traitlets import (
-    Bool, Unicode, Integer, Float, List, Dict
+    Bool, Unicode, Integer, List, Dict
 )
 
 #-----------------------------------------------------------------------------
@@ -72,13 +76,23 @@ class MyApp(Application):
             ))
     
     def init_foo(self):
-        self.foo = Foo(config=self.config)
+        self.foo = Foo(parent=self)
 
     def init_bar(self):
-        self.bar = Bar(config=self.config)
+        self.bar = Bar(parent=self)
 
 
 class TestApplication(TestCase):
+
+    def test_log(self):
+        stream = StringIO()
+        app = MyApp(log_level=logging.INFO)
+        handler = logging.StreamHandler(stream)
+        # trigger reconstruction of the log formatter
+        app.log.handlers = [handler]
+        app.log_format = "%(message)s"
+        app.log.info("hello")
+        nt.assert_in("hello", stream.getvalue())
 
     def test_basic(self):
         app = MyApp()
@@ -172,4 +186,8 @@ class TestApplication(TestCase):
         self.assertEqual(app.bar.b, 5)
         self.assertEqual(app.extra_args, ['extra', '--disable', 'args'])
     
+    def test_unicode_argv(self):
+        app = MyApp()
+        app.parse_command_line(['ünîcødé'])
+        
 

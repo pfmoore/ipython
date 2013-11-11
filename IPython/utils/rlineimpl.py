@@ -9,13 +9,8 @@ In addition to normal readline stuff, this module provides have_readline
 boolean and _outputfile variable used in IPython.utils.
 """
 
-import os
-import re
 import sys
-import time
 import warnings
-
-from subprocess import Popen, PIPE
 
 if sys.platform == 'darwin':
     # dirty trick, to skip the system readline, because pip-installed readline
@@ -61,19 +56,7 @@ if sys.platform == 'darwin':
     # cleanup dirty trick vars
     del dynload_idx, lib_dynload
 
-if have_readline and hasattr(_rl, 'rlmain'):
-    # patch add_history to allow for strings in pyreadline <= 1.5:
-    # fix copied from pyreadline 1.6
-    import pyreadline
-    if pyreadline.release.version <= '1.5':
-        def add_history(line):
-            """add a line to the history buffer."""
-            from pyreadline import lineobj
-            if not isinstance(line, lineobj.TextLine):
-                line = lineobj.TextLine(line)
-            return _rl.add_history(line)
-
-if sys.platform == 'win32' and have_readline:
+if (sys.platform == 'win32' or sys.platform == 'cli') and have_readline:
     try:
         _outputfile=_rl.GetOutputFile()
     except AttributeError:
@@ -102,10 +85,10 @@ if uses_libedit and sys.platform == 'darwin':
         "   * corrupting long-lines",
         "   * failure to wrap or indent lines properly",
         "It is highly recommended that you install readline, which is easy_installable:",
-        "     easy_install readline",
+        "     easy_install -a readline",
         "Note that `pip install readline` generally DOES NOT WORK, because",
         "it installs to site-packages, which come *after* lib-dynload in sys.path,",
-        "where readline is located.  It must be `easy_install readline`, or to a custom",
+        "where readline is located.  It must be `easy_install -a readline`, or to a custom",
         "location on your PYTHONPATH (even --user comes after lib-dyload).",
         "*"*78]),
         RuntimeWarning)

@@ -22,9 +22,7 @@ import sys
 from IPython.external import pexpect
 
 # Our own
-from .autoattr import auto_attr
 from ._process_common import getoutput, arg_split
-from IPython.utils import text
 from IPython.utils import py3compat
 from IPython.utils.encoding import DEFAULT_ENCODING
 
@@ -56,14 +54,16 @@ class ProcessHandler(object):
     logfile = None
 
     # Shell to call for subprocesses to execute
-    sh = None
+    _sh = None
 
-    @auto_attr
+    @property
     def sh(self):
-        sh = pexpect.which('sh')
-        if sh is None:
-            raise OSError('"sh" shell not found')
-        return sh
+        if self._sh is None:        
+            self._sh = pexpect.which('sh')
+            if self._sh is None:
+                raise OSError('"sh" shell not found')
+        
+        return self._sh
 
     def __init__(self, logfile=None, read_timeout=None, terminate_timeout=None):
         """Arguments are used for pexpect calls."""
@@ -184,6 +184,21 @@ class ProcessHandler(object):
                 child.terminate(force=True)
         # add isalive check, to ensure exitstatus is set:
         child.isalive()
+
+        # We follow the subprocess pattern, returning either the exit status
+        # as a positive number, or the terminating signal as a negative
+        # number.
+        # on Linux, sh returns 128+n for signals terminating child processes on Linux
+        # on BSD (OS X), the signal code is set instead
+        if child.exitstatus is None:
+            # on WIFSIGNALED, pexpect sets signalstatus, leaving exitstatus=None
+            if child.signalstatus is None:
+                # this condition may never occur,
+                # but let's be certain we always return an integer.
+                return 0
+            return -child.signalstatus
+        if child.exitstatus > 128:
+            return -(child.exitstatus - 128)
         return child.exitstatus
 
 

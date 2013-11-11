@@ -13,8 +13,11 @@ This file is meant to be used by process.py
 from __future__ import print_function
 
 # stdlib
-import os, sys, time, threading
+import os, sys, threading
 import ctypes, msvcrt
+
+# local imports
+from . import py3compat
 
 # Win32 API types needed for the API calls
 from ctypes import POINTER
@@ -161,8 +164,8 @@ class AvoidUNCPath(object):
     change and None otherwise, so that users can apply the necessary adjustment
     to their system calls in the event of a change.
 
-    Example
-    -------
+    Examples
+    --------
     ::
         cmd = 'dir'
         with AvoidUNCPath() as path:
@@ -171,7 +174,7 @@ class AvoidUNCPath(object):
             os.system(cmd)
     """
     def __enter__(self):
-        self.path = os.getcwdu()
+        self.path = py3compat.getcwd()
         self.is_unc_path = self.path.startswith(r"\\")
         if self.is_unc_path:
             # change to c drive (as cmd.exe cannot handle UNC addresses)

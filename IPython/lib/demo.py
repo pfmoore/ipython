@@ -1,6 +1,3 @@
-from __future__ import unicode_literals
-
-
 """Module for interactive demos using IPython.
 
 This module implements a few classes for running Python scripts interactively
@@ -10,21 +7,21 @@ control to IPython.
 
 
 Provided classes
-================
+----------------
 
 The classes are (see their docstrings for further details):
 
  - Demo: pure python demos
 
  - IPythonDemo: demos with input to be processed by IPython as if it had been
- typed interactively (so magics work, as well as any other special syntax you
- may have added via input prefilters).
+   typed interactively (so magics work, as well as any other special syntax you
+   may have added via input prefilters).
 
  - LineDemo: single-line version of the Demo class.  These demos are executed
- one line at a time, and require no markup.
+   one line at a time, and require no markup.
 
  - IPythonLineDemo: IPython version of the LineDemo class (the demo is
- executed a line at a time, but processed via IPython).
+   executed a line at a time, but processed via IPython).
 
  - ClearMixin: mixin to make Demo classes with less visual clutter.  It
    declares an empty marquee and a pre_cmd that clears the screen before each
@@ -33,9 +30,13 @@ The classes are (see their docstrings for further details):
  - ClearDemo, ClearIPDemo: mixin-enabled versions of the Demo and IPythonDemo
    classes.
 
+Inheritance diagram:
+
+.. inheritance-diagram:: IPython.lib.demo
+   :parts: 3
 
 Subclassing
-===========
+-----------
 
 The classes here all include a few methods meant to make customization by
 subclassing more convenient.  Their docstrings below have some more details:
@@ -50,7 +51,7 @@ subclassing more convenient.  Their docstrings below have some more details:
 
 
 Operation
-=========
+---------
 
 The file is run in its own empty namespace (though you can pass it a string of
 arguments as if in a command line environment, and it will see those as
@@ -103,11 +104,11 @@ place a set of stop tags; the other tags are only there to let you fine-tune
 the execution.
 
 This is probably best explained with the simple example file below.  You can
-copy this into a file named ex_demo.py, and try running it via:
+copy this into a file named ex_demo.py, and try running it via::
 
-from IPython.demo import Demo
-d = Demo('ex_demo.py')
-d()  <--- Call the d object (omit the parens if you have autocall set to 2).
+    from IPython.demo import Demo
+    d = Demo('ex_demo.py')
+    d()
 
 Each time you call the demo object, it runs the next block.  The demo object
 has a few useful methods for navigation, like again(), edit(), jump(), seek()
@@ -123,46 +124,50 @@ an IPython session, and type::
 and then follow the directions.
 
 Example
-=======
+-------
 
 The following is a very simple example of a valid demo file.
 
-#################### EXAMPLE DEMO <ex_demo.py> ###############################
-'''A simple interactive demo to illustrate the use of IPython's Demo class.'''
+::
 
-print 'Hello, welcome to an interactive IPython demo.'
+    #################### EXAMPLE DEMO <ex_demo.py> ###############################
+    '''A simple interactive demo to illustrate the use of IPython's Demo class.'''
 
-# The mark below defines a block boundary, which is a point where IPython will
-# stop execution and return to the interactive prompt. The dashes are actually
-# optional and used only as a visual aid to clearly separate blocks while
-# editing the demo code.
-# <demo> stop
+    print 'Hello, welcome to an interactive IPython demo.'
 
-x = 1
-y = 2
+    # The mark below defines a block boundary, which is a point where IPython will
+    # stop execution and return to the interactive prompt. The dashes are actually
+    # optional and used only as a visual aid to clearly separate blocks while
+    # editing the demo code.
+    # <demo> stop
 
-# <demo> stop
+    x = 1
+    y = 2
 
-# the mark below makes this block as silent
-# <demo> silent
+    # <demo> stop
 
-print 'This is a silent block, which gets executed but not printed.'
+    # the mark below makes this block as silent
+    # <demo> silent
 
-# <demo> stop
-# <demo> auto
-print 'This is an automatic block.'
-print 'It is executed without asking for confirmation, but printed.'
-z = x+y
+    print 'This is a silent block, which gets executed but not printed.'
 
-print 'z=',x
+    # <demo> stop
+    # <demo> auto
+    print 'This is an automatic block.'
+    print 'It is executed without asking for confirmation, but printed.'
+    z = x+y
 
-# <demo> stop
-# This is just another normal block.
-print 'z is now:', z
+    print 'z=',x
 
-print 'bye!'
-################### END EXAMPLE DEMO <ex_demo.py> ############################
+    # <demo> stop
+    # This is just another normal block.
+    print 'z is now:', z
+
+    print 'bye!'
+    ################### END EXAMPLE DEMO <ex_demo.py> ############################
 """
+
+from __future__ import unicode_literals
 
 #*****************************************************************************
 #     Copyright (C) 2005-2006 Fernando Perez. <Fernando.Perez@colorado.edu>
@@ -178,11 +183,10 @@ import re
 import shlex
 import sys
 
-from IPython.utils.PyColorize import Parser
 from IPython.utils import io
-from IPython.utils.io import file_read, file_readlines
 from IPython.utils.text import marquee
 from IPython.utils import openpy
+from IPython.utils import py3compat
 __all__ = ['Demo','IPythonDemo','LineDemo','IPythonLineDemo','DemoError']
 
 class DemoError(Exception): pass
@@ -211,18 +215,18 @@ class Demo(object):
         Optional inputs:
 
           - title: a string to use as the demo name.  Of most use when the demo
-          you are making comes from an object that has no filename, or if you
-          want an alternate denotation distinct from the filename.
+            you are making comes from an object that has no filename, or if you
+            want an alternate denotation distinct from the filename.
 
           - arg_str(''): a string of arguments, internally converted to a list
-          just like sys.argv, so the demo script can see a similar
-          environment.
+            just like sys.argv, so the demo script can see a similar
+            environment.
 
           - auto_all(None): global flag to run all blocks automatically without
-          confirmation.  This attribute overrides the block-level tags and
-          applies to the whole demo.  It is an attribute of the object, and
-          can be changed at runtime simply by reassigning it to a boolean
-          value.
+            confirmation.  This attribute overrides the block-level tags and
+            applies to the whole demo.  It is an attribute of the object, and
+            can be changed at runtime simply by reassigning it to a boolean
+            value.
           """
         if hasattr(src, "read"):
              # It seems to be a file or a file-like object
@@ -376,7 +380,8 @@ class Demo(object):
 
         filename = self.shell.mktempfile(self.src_blocks[index])
         self.shell.hooks.editor(filename,1)
-        new_block = file_read(filename)
+        with open(filename, 'r') as f:
+            new_block = f.read()
         # update the source and colored block
         self.src_blocks[index] = new_block
         self.src_blocks_colored[index] = self.ip_colorize(new_block)
@@ -393,7 +398,7 @@ class Demo(object):
 
         print(self.marquee('<%s> block # %s (%s remaining)' %
                            (self.title,index,self.nblocks-index-1)), file=io.stdout)
-        print((self.src_blocks_colored[index]), file=io.stdout)
+        print(self.src_blocks_colored[index], file=io.stdout)
         sys.stdout.flush()
 
     def show_all(self):
@@ -417,7 +422,7 @@ class Demo(object):
     def run_cell(self,source):
         """Execute a string with one or more lines of code"""
 
-        exec source in self.user_ns
+        exec(source, self.user_ns)
 
     def __call__(self,index=None):
         """run a block of the demo.
@@ -445,7 +450,7 @@ class Demo(object):
                     print(marquee('output:'), file=io.stdout)
                 else:
                     print(marquee('Press <q> to quit, <Enter> to execute...'), end=' ', file=io.stdout)
-                    ans = raw_input().strip()
+                    ans = py3compat.input().strip()
                     if ans:
                         print(marquee('Block NOT executed'), file=io.stdout)
                         return

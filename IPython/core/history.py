@@ -20,13 +20,17 @@ import re
 try:
     import sqlite3
 except ImportError:
-    sqlite3 = None
+    try:
+        from pysqlite2 import dbapi2 as sqlite3
+    except ImportError:
+        sqlite3 = None
 import threading
 
 # Our own packages
 from IPython.config.configurable import Configurable
 from IPython.external.decorator import decorator
 from IPython.utils.path import locate_profile
+from IPython.utils import py3compat
 from IPython.utils.traitlets import (
     Any, Bool, Dict, Instance, Integer, List, Unicode, TraitError,
 )
@@ -145,7 +149,7 @@ class HistoryAccessor(Configurable):
                     (self.__class__.__name__, new)
             raise TraitError(msg)
     
-    def __init__(self, profile='default', hist_file=u'', config=None, **traits):
+    def __init__(self, profile='default', hist_file=u'', **traits):
         """Create a new history accessor.
         
         Parameters
@@ -159,7 +163,7 @@ class HistoryAccessor(Configurable):
           Config object. hist_file can also be set through this.
         """
         # We need a pointer back to the shell for various tasks.
-        super(HistoryAccessor, self).__init__(config=config, **traits)
+        super(HistoryAccessor, self).__init__(**traits)
         # defer setting hist_file from kwarg until after init,
         # otherwise the default kwarg value would clobber any value
         # set by config
@@ -171,7 +175,7 @@ class HistoryAccessor(Configurable):
             self.hist_file = self._get_hist_file_name(profile)
 
         if sqlite3 is None and self.enabled:
-            warn("IPython History requires SQLite, your history will not be saved\n")
+            warn("IPython History requires SQLite, your history will not be saved")
             self.enabled = False
         
         self.init_db()
@@ -307,7 +311,7 @@ class HistoryAccessor(Configurable):
 
     @catch_corrupt_db
     def search(self, pattern="*", raw=True, search_raw=True,
-               output=False, n=None):
+               output=False, n=None, unique=False):
         """Search the database using unix glob-style matching (wildcards
         * and ?).
 
@@ -322,6 +326,8 @@ class HistoryAccessor(Configurable):
         n : None or int
           If an integer is given, it defines the limit of
           returned entries.
+        unique : bool
+          When it is true, return only unique entries.
 
         Returns
         -------
@@ -333,9 +339,13 @@ class HistoryAccessor(Configurable):
         self.writeout_cache()
         sqlform = "WHERE %s GLOB ?" % tosearch
         params = (pattern,)
+        if unique:
+            sqlform += ' GROUP BY {0}'.format(tosearch)
         if n is not None:
             sqlform += " ORDER BY session DESC, line DESC LIMIT ?"
             params += (n,)
+        elif unique:
+            sqlform += " ORDER BY session, line"
         cur = self._run_sql(sqlform, params, raw=raw, output=output)
         if n is not None:
             return reversed(list(cur))
@@ -414,7 +424,7 @@ class HistoryManager(HistoryAccessor):
     dir_hist = List()
     def _dir_hist_default(self):
         try:
-            return [os.getcwdu()]
+            return [py3compat.getcwd()]
         except OSError:
             return []
 
@@ -510,7 +520,7 @@ class HistoryManager(HistoryAccessor):
         optionally open a new session."""
         self.output_hist.clear()
         # The directory history can't be completely empty
-        self.dir_hist[:] = [os.getcwdu()]
+        self.dir_hist[:] = [py3compat.getcwd()]
         
         if new_session:
             if self.session_number:
@@ -625,8 +635,9 @@ class HistoryManager(HistoryAccessor):
                    '_ii': self._ii,
                    '_iii': self._iii,
                    new_i : self._i00 }
-
-        self.shell.push(to_main, interactive=False)
+        
+        if self.shell is not None:
+            self.shell.push(to_main, interactive=False)
 
     def store_output(self, line_num):
         """If database output logging is enabled, this saves all the
@@ -703,7 +714,7 @@ class HistorySavingThread(threading.Thread):
     stop_now = False
     enabled = True
     def __init__(self, history_manager):
-        super(HistorySavingThread, self).__init__()
+        super(HistorySavingThread, self).__init__(name="IPythonHistorySavingThread")
         self.history_manager = history_manager
         self.enabled = history_manager.enabled
         atexit.register(self.stop)
@@ -739,7 +750,7 @@ class HistorySavingThread(threading.Thread):
 # To match, e.g. ~5/8-~2/3
 range_re = re.compile(r"""
 ((?P<startsess>~?\d+)/)?
-(?P<start>\d+)                    # Only the start line num is compulsory
+(?P<start>\d+)?
 ((?P<sep>[\-:])
  ((?P<endsess>~?\d+)/)?
  (?P<end>\d+))?
@@ -758,16 +769,25 @@ def extract_hist_ranges(ranges_str):
         rmatch = range_re.match(range_str)
         if not rmatch:
             continue
-        start = int(rmatch.group("start"))
-        end = rmatch.group("end")
-        end = int(end) if end else start+1   # If no end specified, get (a, a+1)
+        start = rmatch.group("start")
+        if start:
+            start = int(start)
+            end = rmatch.group("end")
+            # If no end specified, get (a, a + 1)
+            end = int(end) if end else start + 1
+        else:  # start not specified
+            if not rmatch.group('startsess'):  # no startsess
+                continue
+            start = 1
+            end = None  # provide the entire session hist
+
         if rmatch.group("sep") == "-":       # 1-3 == 1:4 --> [1, 2, 3]
             end += 1
         startsess = rmatch.group("startsess") or "0"
         endsess = rmatch.group("endsess") or startsess
         startsess = int(startsess.replace("~","-"))
         endsess = int(endsess.replace("~","-"))
-        assert endsess >= startsess
+        assert endsess >= startsess, "start session must be earlier than end session"
 
         if endsess == startsess:
             yield (startsess, start, end)

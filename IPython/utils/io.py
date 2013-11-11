@@ -17,7 +17,8 @@ from __future__ import print_function
 import os
 import sys
 import tempfile
-from StringIO import StringIO
+from .capture import CapturedIO, capture_output
+from .py3compat import string_types, input
 
 #-----------------------------------------------------------------------------
 # Code
@@ -56,7 +57,7 @@ class IOStream:
                       file=sys.stderr)
 
     def writelines(self, lines):
-        if isinstance(lines, basestring):
+        if isinstance(lines, string_types):
             lines = [lines]
         for line in lines:
             self.write(line)
@@ -154,64 +155,6 @@ class Tee(object):
             self.close()
 
 
-def file_read(filename):
-    """Read a file and close it.  Returns the file source."""
-    fobj = open(filename,'r');
-    source = fobj.read();
-    fobj.close()
-    return source
-
-
-def file_readlines(filename):
-    """Read a file and close it.  Returns the file source using readlines()."""
-    fobj = open(filename,'r');
-    lines = fobj.readlines();
-    fobj.close()
-    return lines
-
-
-def raw_input_multi(header='', ps1='==> ', ps2='..> ',terminate_str = '.'):
-    """Take multiple lines of input.
-
-    A list with each line of input as a separate element is returned when a
-    termination string is entered (defaults to a single '.'). Input can also
-    terminate via EOF (^D in Unix, ^Z-RET in Windows).
-
-    Lines of input which end in \\ are joined into single entries (and a
-    secondary continuation prompt is issued as long as the user terminates
-    lines with \\). This allows entering very long strings which are still
-    meant to be treated as single entities.
-    """
-
-    try:
-        if header:
-            header += '\n'
-        lines = [raw_input(header + ps1)]
-    except EOFError:
-        return []
-    terminate = [terminate_str]
-    try:
-        while lines[-1:] != terminate:
-            new_line = raw_input(ps1)
-            while new_line.endswith('\\'):
-                new_line = new_line[:-1] + raw_input(ps2)
-            lines.append(new_line)
-
-        return lines[:-1]  # don't return the termination command
-    except EOFError:
-        print()
-        return lines
-
-
-def raw_input_ext(prompt='',  ps2='... '):
-    """Similar to raw_input(), but accepts extended lines if input ends with \\."""
-
-    line = raw_input(prompt)
-    while line.endswith('\\'):
-        line = line[:-1] + raw_input(ps2)
-    return line
-
-
 def ask_yes_no(prompt,default=None):
     """Asks a question and returns a boolean (y/n) answer.
 
@@ -227,7 +170,7 @@ def ask_yes_no(prompt,default=None):
     ans = None
     while ans not in answers.keys():
         try:
-            ans = raw_input(prompt+' ').lower()
+            ans = input(prompt+' ').lower()
             if not ans:  # response was an empty string
                 ans = default
         except KeyboardInterrupt:
@@ -240,44 +183,6 @@ def ask_yes_no(prompt,default=None):
                 raise
 
     return answers[ans]
-
-
-class NLprinter:
-    """Print an arbitrarily nested list, indicating index numbers.
-
-    An instance of this class called nlprint is available and callable as a
-    function.
-
-    nlprint(list,indent=' ',sep=': ') -> prints indenting each level by 'indent'
-    and using 'sep' to separate the index from the value. """
-
-    def __init__(self):
-        self.depth = 0
-
-    def __call__(self,lst,pos='',**kw):
-        """Prints the nested list numbering levels."""
-        kw.setdefault('indent',' ')
-        kw.setdefault('sep',': ')
-        kw.setdefault('start',0)
-        kw.setdefault('stop',len(lst))
-        # we need to remove start and stop from kw so they don't propagate
-        # into a recursive call for a nested list.
-        start = kw['start']; del kw['start']
-        stop = kw['stop']; del kw['stop']
-        if self.depth == 0 and 'header' in kw.keys():
-            print(kw['header'])
-
-        for idx in range(start,stop):
-            elem = lst[idx]
-            newpos = pos + str(idx)
-            if type(elem)==type([]):
-                self.depth += 1
-                self.__call__(elem, newpos+",", **kw)
-                self.depth -= 1
-            else:
-                print(kw['indent']*self.depth + newpos + kw["sep"] + repr(elem))
-
-nlprint = NLprinter()
 
 
 def temp_pyfile(src, ext='.py'):
@@ -322,63 +227,3 @@ def raw_print_err(*args, **kw):
 # Short aliases for quick debugging, do NOT use these in production code.
 rprint = raw_print
 rprinte = raw_print_err
-
-
-class CapturedIO(object):
-    """Simple object for containing captured stdout/err StringIO objects"""
-    
-    def __init__(self, stdout, stderr):
-        self._stdout = stdout
-        self._stderr = stderr
-    
-    def __str__(self):
-        return self.stdout
-    
-    @property
-    def stdout(self):
-        if not self._stdout:
-            return ''
-        return self._stdout.getvalue()
-    
-    @property
-    def stderr(self):
-        if not self._stderr:
-            return ''
-        return self._stderr.getvalue()
-    
-    def show(self):
-        """write my output to sys.stdout/err as appropriate"""
-        sys.stdout.write(self.stdout)
-        sys.stderr.write(self.stderr)
-        sys.stdout.flush()
-        sys.stderr.flush()
-    
-    __call__ = show
-
-
-class capture_output(object):
-    """context manager for capturing stdout/err"""
-    stdout = True
-    stderr = True
-    
-    def __init__(self, stdout=True, stderr=True):
-        self.stdout = stdout
-        self.stderr = stderr
-    
-    def __enter__(self):
-        self.sys_stdout = sys.stdout
-        self.sys_stderr = sys.stderr
-        
-        stdout = stderr = False
-        if self.stdout:
-            stdout = sys.stdout = StringIO()
-        if self.stderr:
-            stderr = sys.stderr = StringIO()
-        
-        return CapturedIO(stdout, stderr)
-    
-    def __exit__(self, exc_type, exc_value, traceback):
-        sys.stdout = self.sys_stdout
-        sys.stderr = self.sys_stderr
-
-

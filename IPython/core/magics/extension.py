@@ -1,5 +1,6 @@
 """Implementation of magic functions for the extension machinery.
 """
+from __future__ import print_function
 #-----------------------------------------------------------------------------
 #  Copyright (c) 2012 The IPython Development Team.
 #
@@ -46,12 +47,12 @@ class ExtensionMagics(Magics):
             filename = self.shell.extension_manager.install_extension(args,
                                                                  opts.get('n'))
         except ValueError as e:
-            print e
+            print(e)
             return
 
         filename = os.path.basename(filename)
-        print "Installed %s. To use it, type:" % filename
-        print "  %%load_ext %s" % os.path.splitext(filename)[0]
+        print("Installed %s. To use it, type:" % filename)
+        print("  %%load_ext %s" % os.path.splitext(filename)[0])
 
 
     @line_magic
@@ -59,14 +60,30 @@ class ExtensionMagics(Magics):
         """Load an IPython extension by its module name."""
         if not module_str:
             raise UsageError('Missing module name.')
-        return self.shell.extension_manager.load_extension(module_str)
+        res = self.shell.extension_manager.load_extension(module_str)
+        
+        if res == 'already loaded':
+            print("The %s extension is already loaded. To reload it, use:" % module_str)
+            print("  %reload_ext", module_str)
+        elif res == 'no load function':
+            print("The %s module is not an IPython extension." % module_str)
 
     @line_magic
     def unload_ext(self, module_str):
-        """Unload an IPython extension by its module name."""
+        """Unload an IPython extension by its module name.
+        
+        Not all extensions can be unloaded, only those which define an
+        ``unload_ipython_extension`` function.
+        """
         if not module_str:
             raise UsageError('Missing module name.')
-        self.shell.extension_manager.unload_extension(module_str)
+        
+        res = self.shell.extension_manager.unload_extension(module_str)
+        
+        if res == 'no unload function':
+            print("The %s extension doesn't define how to unload it." % module_str)
+        elif res == "not loaded":
+            print("The %s extension is not loaded." % module_str)
 
     @line_magic
     def reload_ext(self, module_str):

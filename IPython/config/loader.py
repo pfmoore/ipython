@@ -1,5 +1,10 @@
 """A simple configuration system.
 
+Inheritance diagram:
+
+.. inheritance-diagram:: IPython.config.loader
+   :parts: 3
+
 Authors
 -------
 * Brian Granger
@@ -18,15 +23,17 @@ Authors
 # Imports
 #-----------------------------------------------------------------------------
 
-import __builtin__ as builtin_mod
+import argparse
+import copy
 import os
 import re
 import sys
 
-from IPython.external import argparse
 from IPython.utils.path import filefind, get_ipython_dir
-from IPython.utils import py3compat, text, warn
+from IPython.utils import py3compat, warn
 from IPython.utils.encoding import DEFAULT_ENCODING
+from IPython.utils.py3compat import unicode_type, iteritems
+from IPython.utils.traitlets import HasTraits, List, Any, TraitError
 
 #-----------------------------------------------------------------------------
 # Exceptions
@@ -69,51 +76,157 @@ class ArgumentParser(argparse.ArgumentParser):
 # Config class for holding config information
 #-----------------------------------------------------------------------------
 
+class LazyConfigValue(HasTraits):
+    """Proxy object for exposing methods on configurable containers
+    
+    Exposes:
+    
+    - append, extend, insert on lists
+    - update on dicts
+    - update, add on sets
+    """
+    
+    _value = None
+    
+    # list methods
+    _extend = List()
+    _prepend = List()
+    
+    def append(self, obj):
+        self._extend.append(obj)
+    
+    def extend(self, other):
+        self._extend.extend(other)
+    
+    def prepend(self, other):
+        """like list.extend, but for the front"""
+        self._prepend[:0] = other
+    
+    _inserts = List()
+    def insert(self, index, other):
+        if not isinstance(index, int):
+            raise TypeError("An integer is required")
+        self._inserts.append((index, other))
+    
+    # dict methods
+    # update is used for both dict and set
+    _update = Any()
+    def update(self, other):
+        if self._update is None:
+            if isinstance(other, dict):
+                self._update = {}
+            else:
+                self._update = set()
+        self._update.update(other)
+    
+    # set methods
+    def add(self, obj):
+        self.update({obj})
+    
+    def get_value(self, initial):
+        """construct the value from the initial one
+        
+        after applying any insert / extend / update changes
+        """
+        if self._value is not None:
+            return self._value
+        value = copy.deepcopy(initial)
+        if isinstance(value, list):
+            for idx, obj in self._inserts:
+                value.insert(idx, obj)
+            value[:0] = self._prepend
+            value.extend(self._extend)
+        
+        elif isinstance(value, dict):
+            if self._update:
+                value.update(self._update)
+        elif isinstance(value, set):
+            if self._update:
+                value.update(self._update)
+        self._value = value
+        return value
+    
+    def to_dict(self):
+        """return JSONable dict form of my data
+        
+        Currently update as dict or set, extend, prepend as lists, and inserts as list of tuples.
+        """
+        d = {}
+        if self._update:
+            d['update'] = self._update
+        if self._extend:
+            d['extend'] = self._extend
+        if self._prepend:
+            d['prepend'] = self._prepend
+        elif self._inserts:
+            d['inserts'] = self._inserts
+        return d
+
+
+def _is_section_key(key):
+    """Is a Config key a section name (does it start with a capital)?"""
+    if key and key[0].upper()==key[0] and not key.startswith('_'):
+        return True
+    else:
+        return False
+
 
 class Config(dict):
     """An attribute based dict that can do smart merges."""
 
     def __init__(self, *args, **kwds):
         dict.__init__(self, *args, **kwds)
-        # This sets self.__dict__ = self, but it has to be done this way
-        # because we are also overriding __setattr__.
-        dict.__setattr__(self, '__dict__', self)
-
+        self._ensure_subconfig()
+    
+    def _ensure_subconfig(self):
+        """ensure that sub-dicts that should be Config objects are
+        
+        casts dicts that are under section keys to Config objects,
+        which is necessary for constructing Config objects from dict literals.
+        """
+        for key in self:
+            obj = self[key]
+            if _is_section_key(key) \
+                    and isinstance(obj, dict) \
+                    and not isinstance(obj, Config):
+                setattr(self, key, Config(obj))
+    
     def _merge(self, other):
+        """deprecated alias, use Config.merge()"""
+        self.merge(other)
+    
+    def merge(self, other):
+        """merge another config object into this one"""
         to_update = {}
-        for k, v in other.iteritems():
+        for k, v in iteritems(other):
             if k not in self:
-                to_update[k] = v
+                to_update[k] = copy.deepcopy(v)
             else: # I have this key
-                if isinstance(v, Config):
+                if isinstance(v, Config) and isinstance(self[k], Config):
                     # Recursively merge common sub Configs
-                    self[k]._merge(v)
+                    self[k].merge(v)
                 else:
                     # Plain updates for non-Configs
-                    to_update[k] = v
+                    to_update[k] = copy.deepcopy(v)
 
         self.update(to_update)
 
-    def _is_section_key(self, key):
-        if key[0].upper()==key[0] and not key.startswith('_'):
-            return True
-        else:
-            return False
-
     def __contains__(self, key):
-        if self._is_section_key(key):
-            return True
-        else:
-            return super(Config, self).__contains__(key)
+        # allow nested contains of the form `"Section.key" in config`
+        if '.' in key:
+            first, remainder = key.split('.', 1)
+            if first not in self:
+                return False
+            return remainder in self[first]
+        
+        return super(Config, self).__contains__(key)
+    
     # .has_key is deprecated for dictionaries.
     has_key = __contains__
-
+    
     def _has_section(self, key):
-        if self._is_section_key(key):
-            if super(Config, self).__contains__(key):
-                return True
-        return False
-
+        return _is_section_key(key) and key in self
+    
     def copy(self):
         return type(self)(dict.copy(self))
 
@@ -122,57 +235,48 @@ class Config(dict):
 
     def __deepcopy__(self, memo):
         import copy
-        return type(self)(copy.deepcopy(self.items()))
-
+        return type(self)(copy.deepcopy(list(self.items())))
+    
     def __getitem__(self, key):
-        # We cannot use directly self._is_section_key, because it triggers
-        # infinite recursion on top of PyPy. Instead, we manually fish the
-        # bound method.
-        is_section_key = self.__class__._is_section_key.__get__(self)
-
-        # Because we use this for an exec namespace, we need to delegate
-        # the lookup of names in __builtin__ to itself.  This means
-        # that you can't have section or attribute names that are
-        # builtins.
         try:
-            return getattr(builtin_mod, key)
-        except AttributeError:
-            pass
-        if is_section_key(key):
-            try:
-                return dict.__getitem__(self, key)
-            except KeyError:
+            return dict.__getitem__(self, key)
+        except KeyError:
+            if _is_section_key(key):
                 c = Config()
                 dict.__setitem__(self, key, c)
                 return c
-        else:
-            return dict.__getitem__(self, key)
+            else:
+                # undefined, create lazy value, used for container methods
+                v = LazyConfigValue()
+                dict.__setitem__(self, key, v)
+                return v
 
     def __setitem__(self, key, value):
-        # Don't allow names in __builtin__ to be modified.
-        if hasattr(builtin_mod, key):
-            raise ConfigError('Config variable names cannot have the same name '
-                              'as a Python builtin: %s' % key)
-        if self._is_section_key(key):
+        if _is_section_key(key):
             if not isinstance(value, Config):
                 raise ValueError('values whose keys begin with an uppercase '
                                  'char must be Config instances: %r, %r' % (key, value))
-        else:
-            dict.__setitem__(self, key, value)
+        dict.__setitem__(self, key, value)
 
     def __getattr__(self, key):
+        if key.startswith('__'):
+            return dict.__getattr__(self, key)
         try:
             return self.__getitem__(key)
         except KeyError as e:
             raise AttributeError(e)
 
     def __setattr__(self, key, value):
+        if key.startswith('__'):
+            return dict.__setattr__(self, key, value)
         try:
             self.__setitem__(key, value)
         except KeyError as e:
             raise AttributeError(e)
 
     def __delattr__(self, key):
+        if key.startswith('__'):
+            return dict.__delattr__(self, key)
         try:
             dict.__delitem__(self, key)
         except KeyError as e:
@@ -309,14 +413,18 @@ class PyFileConfigLoader(FileConfigLoader):
                 # when a user s using a profile, but not the default config.
                 pass
             else:
-                self.config._merge(sub_config)
+                self.config.merge(sub_config)
 
         # Again, this needs to be a closure and should be used in config
         # files to get the config being loaded.
         def get_config():
             return self.config
 
-        namespace = dict(load_subconfig=load_subconfig, get_config=get_config)
+        namespace = dict(
+            load_subconfig=load_subconfig,
+            get_config=get_config,
+            __file__=self.full_filename,
+        )
         fs_encoding = sys.getfilesystemencoding() or 'ascii'
         conf_filename = self.full_filename.encode(fs_encoding)
         py3compat.execfile(conf_filename, namespace)
@@ -351,14 +459,14 @@ class CommandLineConfigLoader(ConfigLoader):
             # This case happens if the rhs is a string.
             value = rhs
 
-        exec u'self.config.%s = value' % lhs
+        exec(u'self.config.%s = value' % lhs)
 
     def _load_flag(self, cfg):
         """update self.config from a flag, which can be a dict or Config"""
         if isinstance(cfg, (dict, Config)):
             # don't clobber whole config sections, update
             # each section from config:
-            for sec,c in cfg.iteritems():
+            for sec,c in iteritems(cfg):
                 self.config[sec].update(c)
         else:
             raise TypeError("Invalid flag: %r" % cfg)
@@ -440,7 +548,7 @@ class KeyValueConfigLoader(CommandLineConfigLoader):
         if enc is None:
             enc = DEFAULT_ENCODING
         for arg in argv:
-            if not isinstance(arg, unicode):
+            if not isinstance(arg, unicode_type):
                 # only decode if not already decoded
                 arg = arg.decode(enc)
             uargv.append(arg)
@@ -470,8 +578,6 @@ class KeyValueConfigLoader(CommandLineConfigLoader):
             or dicts.  When the flag is triggered, The config is loaded as
             `self.config.update(cfg)`.
         """
-        from IPython.config.configurable import Configurable
-
         self.clear()
         if argv is None:
             argv = self.argv
@@ -489,7 +595,7 @@ class KeyValueConfigLoader(CommandLineConfigLoader):
             if raw == '--':
                 # don't parse arguments after '--'
                 # this is useful for relaying arguments to scripts, e.g.
-                # ipython -i foo.py --pylab=qt -- args after '--' go-to-foo.py
+                # ipython -i foo.py --matplotlib=qt -- args after '--' go-to-foo.py
                 self.extra_args.extend(uargv[idx+1:])
                 break
 
@@ -608,8 +714,8 @@ class ArgParseConfigLoader(CommandLineConfigLoader):
 
     def _convert_to_config(self):
         """self.parsed_data->self.config"""
-        for k, v in vars(self.parsed_data).iteritems():
-            exec "self.config.%s = v"%k in locals(), globals()
+        for k, v in iteritems(vars(self.parsed_data)):
+            exec("self.config.%s = v"%k, locals(), globals())
 
 class KVArgParseConfigLoader(ArgParseConfigLoader):
     """A config loader that loads aliases and flags with argparse,
@@ -625,17 +731,17 @@ class KVArgParseConfigLoader(ArgParseConfigLoader):
         if flags is None:
             flags = self.flags
         paa = self.parser.add_argument
-        for key,value in aliases.iteritems():
+        for key,value in iteritems(aliases):
             if key in flags:
                 # flags
                 nargs = '?'
             else:
                 nargs = None
             if len(key) is 1:
-                paa('-'+key, '--'+key, type=unicode, dest=value, nargs=nargs)
+                paa('-'+key, '--'+key, type=unicode_type, dest=value, nargs=nargs)
             else:
-                paa('--'+key, type=unicode, dest=value, nargs=nargs)
-        for key, (value, help) in flags.iteritems():
+                paa('--'+key, type=unicode_type, dest=value, nargs=nargs)
+        for key, (value, help) in iteritems(flags):
             if key in self.aliases:
                 #
                 self.alias_flags[self.aliases[key]] = value
@@ -654,7 +760,7 @@ class KVArgParseConfigLoader(ArgParseConfigLoader):
         else:
             subcs = []
 
-        for k, v in vars(self.parsed_data).iteritems():
+        for k, v in iteritems(vars(self.parsed_data)):
             if v is None:
                 # it was a flag that shares the name of an alias
                 subcs.append(self.alias_flags[k])
@@ -668,7 +774,7 @@ class KVArgParseConfigLoader(ArgParseConfigLoader):
         if self.extra_args:
             sub_parser = KeyValueConfigLoader()
             sub_parser.load_config(self.extra_args)
-            self.config._merge(sub_parser.config)
+            self.config.merge(sub_parser.config)
             self.extra_args = sub_parser.extra_args
 
 
@@ -692,5 +798,5 @@ def load_pyconfig_files(config_files, path):
         except:
             raise
         else:
-            config._merge(next_config)
+            config.merge(next_config)
     return config

@@ -28,6 +28,7 @@ import uuid
 from xml.etree import ElementTree as ET
 
 from IPython.config.configurable import Configurable
+from IPython.utils.py3compat import iteritems
 from IPython.utils.traitlets import (
     Unicode, Integer, List, Instance,
     Enum, Bool
@@ -145,7 +146,7 @@ class WinHPCJob(Configurable):
         """Return the string representation of the job description XML."""
         root = self.as_element()
         indent(root)
-        txt = ET.tostring(root, encoding="utf-8")
+        txt = ET.tostring(root, encoding="utf-8").decode('utf-8')
         # Now remove the tokens used to order the attributes.
         txt = re.sub(r'_[A-Z]_','',txt)
         txt = '<?xml version="1.0" encoding="utf-8"?>\n' + txt
@@ -215,7 +216,7 @@ class WinHPCTask(Configurable):
 
     def get_env_vars(self):
         env_vars = ET.Element('EnvironmentVariables')
-        for k, v in self.environment_variables.iteritems():
+        for k, v in iteritems(self.environment_variables):
             variable = ET.SubElement(env_vars, "Variable")
             name = ET.SubElement(variable, "Name")
             name.text = k
@@ -264,8 +265,8 @@ class IPControllerTask(WinHPCTask):
     unit_type = Unicode("Core", config=False)
     work_directory = Unicode('', config=False)
 
-    def __init__(self, config=None):
-        super(IPControllerTask, self).__init__(config=config)
+    def __init__(self, **kwargs):
+        super(IPControllerTask, self).__init__(**kwargs)
         the_uuid = uuid.uuid1()
         self.std_out_file_path = os.path.join('log','ipcontroller-%s.out' % the_uuid)
         self.std_err_file_path = os.path.join('log','ipcontroller-%s.err' % the_uuid)
@@ -292,8 +293,8 @@ class IPEngineTask(WinHPCTask):
     unit_type = Unicode("Core", config=False)
     work_directory = Unicode('', config=False)
 
-    def __init__(self, config=None):
-        super(IPEngineTask,self).__init__(config=config)
+    def __init__(self, **kwargs):
+        super(IPEngineTask,self).__init__(**kwargs)
         the_uuid = uuid.uuid1()
         self.std_out_file_path = os.path.join('log','ipengine-%s.out' % the_uuid)
         self.std_err_file_path = os.path.join('log','ipengine-%s.err' % the_uuid)

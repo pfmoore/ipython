@@ -14,9 +14,9 @@ Tests for testing.tools
 # Imports
 #-----------------------------------------------------------------------------
 from __future__ import with_statement
+from __future__ import print_function
 
 import os
-import sys
 import unittest
 
 import nose.tools as nt
@@ -52,40 +52,38 @@ def test_full_path_win32():
     nt.assert_equal(result, ['c:\\a.txt'])
 
     
-@dec.parametric
 def test_parser():
     err = ("FAILED (errors=1)", 1, 0)
     fail = ("FAILED (failures=1)", 0, 1)
     both = ("FAILED (errors=1, failures=1)", 1, 1)
     for txt, nerr, nfail in [err, fail, both]:
         nerr1, nfail1 = tt.parse_test_output(txt)
-        yield nt.assert_equal(nerr, nerr1)
-        yield nt.assert_equal(nfail, nfail1)
+        nt.assert_equal(nerr, nerr1)
+        nt.assert_equal(nfail, nfail1)
 
-        
-@dec.parametric
+
 def test_temp_pyfile():
     src = 'pass\n'
     fname, fh = tt.temp_pyfile(src)
-    yield nt.assert_true(os.path.isfile(fname))
+    assert os.path.isfile(fname)
     fh.close()
     with open(fname) as fh2:
         src2 = fh2.read()
-    yield nt.assert_equal(src2, src)
+    nt.assert_equal(src2, src)
 
 class TestAssertPrints(unittest.TestCase):
     def test_passing(self):
         with tt.AssertPrints("abc"):
-            print "abcd"
-            print "def"
-            print b"ghi"
+            print("abcd")
+            print("def")
+            print(b"ghi")
     
     def test_failing(self):
         def func():
             with tt.AssertPrints("abc"):
-                print "acd"
-                print "def"
-                print b"ghi"
+                print("acd")
+                print("def")
+                print(b"ghi")
         
         self.assertRaises(AssertionError, func)
 
@@ -122,7 +120,7 @@ class Test_ipexec_validate(unittest.TestCase, tt.TempFileMixin):
         out = "A\nB"
         tt.ipexec_validate(self.fname, expected_out=out, expected_err="C\nD")
 
-    def test_exception_path(self):
+    def test_exception_path2(self):
         """Test exception path in exception_validate, expecting windows line endings.
         """
         self.mktmp("from __future__ import print_function\n"

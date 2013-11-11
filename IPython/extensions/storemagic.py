@@ -9,6 +9,7 @@ To automatically restore stored variables at startup, add this to your
 
   c.StoreMagic.autorestore = True
 """
+from __future__ import print_function
 #-----------------------------------------------------------------------------
 #  Copyright (c) 2012, The IPython Development Team.
 #
@@ -26,14 +27,15 @@ import inspect, os, sys, textwrap
 
 # Our own
 from IPython.core.error import UsageError
-from IPython.core.fakemodule import FakeModule
 from IPython.core.magic import Magics, magics_class, line_magic
 from IPython.testing.skipdoctest import skip_doctest
+from IPython.utils.traitlets import Bool
+from IPython.utils.py3compat import string_types
 
 #-----------------------------------------------------------------------------
 # Functions and classes
 #-----------------------------------------------------------------------------
-    
+
 def restore_aliases(ip):
     staliases = ip.db.get('stored_aliases', {})
     for k,v in staliases.items():
@@ -50,8 +52,8 @@ def refresh_variables(ip):
         try:
             obj = db[key]
         except KeyError:
-            print "Unable to restore variable '%s', ignoring (use %%store -d to forget!)" % justkey
-            print "The error was:", sys.exc_info()[0]
+            print("Unable to restore variable '%s', ignoring (use %%store -d to forget!)" % justkey)
+            print("The error was:", sys.exc_info()[0])
         else:
             #print "restored",justkey,"=",obj #dbg
             ip.user_ns[justkey] = obj
@@ -72,6 +74,18 @@ class StoreMagics(Magics):
     """Lightweight persistence for python variables.
 
     Provides the %store magic."""
+    
+    autorestore = Bool(False, config=True, help=
+        """If True, any %store-d variables will be automatically restored
+        when IPython starts.
+        """
+    )
+    
+    def __init__(self, shell):
+        super(StoreMagics, self).__init__(shell=shell)
+        self.shell.configurables.append(self)
+        if self.autorestore:
+            restore_data(self.shell)
 
     @skip_doctest
     @line_magic
@@ -88,7 +102,10 @@ class StoreMagics(Magics):
 
           ville@badger:~$ ipython
           In [1]: l
-          Out[1]: ['hello', 10, 'world']
+          NameError: name 'l' is not defined
+          In [2]: %store -r
+          In [3]: l
+          Out[3]: ['hello', 10, 'world']
 
         Usage:
 
@@ -98,8 +115,10 @@ class StoreMagics(Magics):
                                 to disk
         * ``%store -d spam``  - Remove the variable and its value from storage
         * ``%store -z``       - Remove all variables from storage
-        * ``%store -r``       - Refresh all variables from store (delete
+        * ``%store -r``       - Refresh all variables from store (overwrite
                                 current vals)
+        * ``%store -r spam bar`` - Refresh specified variables from store
+                                   (delete current val)
         * ``%store foo >a.txt``  - Store value of foo to new file a.txt
         * ``%store foo >>a.txt`` - Append value of foo to file a.txt
 
@@ -133,8 +152,16 @@ class StoreMagics(Magics):
                 del db[k]
 
         elif 'r' in opts:
-            refresh_variables(ip)
-
+            if args:
+                for arg in args:
+                    try:
+                        obj = db['autorestore/' + arg]
+                    except KeyError:
+                        print("no stored variable %s" % arg)
+                    else:
+                        ip.user_ns[arg] = obj
+            else:
+                restore_data(ip)
 
         # run without arguments -> list variables & values
         elif not args:
@@ -145,13 +172,13 @@ class StoreMagics(Magics):
             else:
                 size = 0
 
-            print 'Stored variables and their in-db values:'
+            print('Stored variables and their in-db values:')
             fmt = '%-'+str(size)+'s -> %s'
             get = db.get
             for var in vars:
                 justkey = os.path.basename(var)
                 # print 30 first characters from every var
-                print fmt % (justkey, repr(get(var, '<unavailable>'))[:50])
+                print(fmt % (justkey, repr(get(var, '<unavailable>'))[:50]))
 
         # default action - store the variable
         else:
@@ -163,11 +190,11 @@ class StoreMagics(Magics):
                 else:
                     fil = open(fnam, 'w')
                 obj = ip.ev(args[0])
-                print "Writing '%s' (%s) to file '%s'." % (args[0],
-                  obj.__class__.__name__, fnam)
+                print("Writing '%s' (%s) to file '%s'." % (args[0],
+                  obj.__class__.__name__, fnam))
 
 
-                if not isinstance (obj, basestring):
+                if not isinstance (obj, string_types):
                     from pprint import pprint
                     pprint(obj, fil)
                 else:
@@ -183,38 +210,34 @@ class StoreMagics(Magics):
                 obj = ip.user_ns[args[0]]
             except KeyError:
                 # it might be an alias
-                # This needs to be refactored to use the new AliasManager stuff.
-                if args[0] in ip.alias_manager:
-                    name = args[0]
-                    nargs, cmd = ip.alias_manager.alias_table[ name ]
-                    staliases = db.get('stored_aliases',{})
-                    staliases[ name ] = cmd
-                    db['stored_aliases'] = staliases
-                    print "Alias stored: %s (%s)" % (name, cmd)
-                    return
-                else:
-                    raise UsageError("Unknown variable '%s'" % args[0])
+                name = args[0]
+                try:
+                    cmd = ip.alias_manager.retrieve_alias(name)
+                except ValueError:
+                    raise UsageError("Unknown variable '%s'" % name)
+                
+                staliases = db.get('stored_aliases',{})
+                staliases[name] = cmd
+                db['stored_aliases'] = staliases
+                print("Alias stored: %s (%s)" % (name, cmd))
+                return
 
             else:
-                if isinstance(inspect.getmodule(obj), FakeModule):
-                    print textwrap.dedent("""\
+                modname = getattr(inspect.getmodule(obj), '__name__', '')
+                if modname == '__main__':
+                    print(textwrap.dedent("""\
                     Warning:%s is %s
                     Proper storage of interactively declared classes (or instances
                     of those classes) is not possible! Only instances
                     of classes in real modules on file system can be %%store'd.
-                    """ % (args[0], obj) )
+                    """ % (args[0], obj) ))
                     return
                 #pickled = pickle.dumps(obj)
                 db[ 'autorestore/' + args[0] ] = obj
-                print "Stored '%s' (%s)" % (args[0], obj.__class__.__name__)
-
-
-_loaded = False
+                print("Stored '%s' (%s)" % (args[0], obj.__class__.__name__))
 
 
 def load_ipython_extension(ip):
     """Load the extension in IPython."""
-    global _loaded
-    if not _loaded:
-        ip.register_magics(StoreMagics)
-        _loaded = True
+    ip.register_magics(StoreMagics)
+    

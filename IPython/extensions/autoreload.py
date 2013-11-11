@@ -107,7 +107,6 @@ skip_doctest = True
 # Imports
 #-----------------------------------------------------------------------------
 
-import imp
 import os
 import sys
 import traceback
@@ -120,22 +119,12 @@ try:
 except NameError:
     from imp import reload
 
-from IPython.utils import pyfile
+from IPython.utils import openpy
 from IPython.utils.py3compat import PY3
 
 #------------------------------------------------------------------------------
 # Autoreload functionality
 #------------------------------------------------------------------------------
-
-def _get_compiled_ext():
-    """Official way to get the extension of compiled files (.pyc or .pyo)"""
-    for ext, mode, typ in imp.get_suffixes():
-        if typ == imp.PY_COMPILED:
-            return ext
-
-
-PY_COMPILED_EXT = _get_compiled_ext()
-
 
 class ModuleReloader(object):
     enabled = False
@@ -197,9 +186,9 @@ class ModuleReloader(object):
             return
 
         if check_all or self.check_all:
-            modules = sys.modules.keys()
+            modules = list(sys.modules.keys())
         else:
-            modules = self.modules.keys()
+            modules = list(self.modules.keys())
 
         for modname in modules:
             m = sys.modules.get(modname, None)
@@ -218,13 +207,12 @@ class ModuleReloader(object):
             path, ext = os.path.splitext(filename)
 
             if ext.lower() == '.py':
-                ext = PY_COMPILED_EXT
-                pyc_filename = pyfile.cache_from_source(filename)
+                pyc_filename = openpy.cache_from_source(filename)
                 py_filename = filename
             else:
                 pyc_filename = filename
                 try:
-                    py_filename = pyfile.source_from_cache(filename)
+                    py_filename = openpy.source_from_cache(filename)
                 except ValueError:
                     continue
 
@@ -270,7 +258,7 @@ def update_function(old, new):
 def update_class(old, new):
     """Replace stuff in the __dict__ of a class, and upgrade
     method code objects"""
-    for key in old.__dict__.keys():
+    for key in list(old.__dict__.keys()):
         old_obj = getattr(old, key)
 
         try:
@@ -320,9 +308,9 @@ else:
     UPDATE_RULES.extend([(lambda a, b: isinstance2(a, b, types.ClassType),
                           update_class),
                          (lambda a, b: isinstance2(a, b, types.MethodType),
-                          lambda a, b: update_function(a.im_func, b.im_func)),
+                          lambda a, b: update_function(a.__func__, b.__func__)),
                         ])
-        
+
 
 def update_generic(a, b):
     for type_check, update in UPDATE_RULES:
@@ -351,7 +339,7 @@ def superreload(module, reload=reload, old_objects={}):
     """
 
     # collect old objects in the module
-    for name, obj in module.__dict__.items():
+    for name, obj in list(module.__dict__.items()):
         if not hasattr(obj, '__module__') or obj.__module__ != module.__name__:
             continue
         key = (module.__name__, name)
@@ -382,7 +370,7 @@ def superreload(module, reload=reload, old_objects={}):
         raise
 
     # iterate over all objects and update functions & classes
-    for name, new_obj in module.__dict__.items():
+    for name, new_obj in list(module.__dict__.items()):
         key = (module.__name__, name)
         if key not in old_objects: continue
 
@@ -485,10 +473,8 @@ class AutoreloadMagics(Magics):
         """
         modname = parameter_s
         if not modname:
-            to_reload = self._reloader.modules.keys()
-            to_reload.sort()
-            to_skip = self._reloader.skip_modules.keys()
-            to_skip.sort()
+            to_reload = sorted(self._reloader.modules.keys())
+            to_skip = sorted(self._reloader.skip_modules.keys())
             if stream is None:
                 stream = sys.stdout
             if self._reloader.check_all:
@@ -514,14 +500,8 @@ class AutoreloadMagics(Magics):
             pass
 
 
-_loaded = False
-
-
 def load_ipython_extension(ip):
     """Load the extension in IPython."""
-    global _loaded
-    if not _loaded:
-        auto_reload = AutoreloadMagics(ip)
-        ip.register_magics(auto_reload)
-        ip.set_hook('pre_run_code_hook', auto_reload.pre_run_code_hook)
-        _loaded = True
+    auto_reload = AutoreloadMagics(ip)
+    ip.register_magics(auto_reload)
+    ip.set_hook('pre_run_code_hook', auto_reload.pre_run_code_hook)

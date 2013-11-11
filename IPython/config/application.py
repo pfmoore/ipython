@@ -7,6 +7,7 @@ Authors:
 * Brian Granger
 * Min RK
 """
+from __future__ import print_function
 
 #-----------------------------------------------------------------------------
 #  Copyright (C) 2008-2011  The IPython Development Team
@@ -38,6 +39,8 @@ from IPython.utils.traitlets import (
 )
 from IPython.utils.importstring import import_item
 from IPython.utils.text import indent, wrap_paragraphs, dedent
+from IPython.utils import py3compat
+from IPython.utils.py3compat import string_types, iteritems
 
 #-----------------------------------------------------------------------------
 # function for re-wrapping a helpstring
@@ -61,6 +64,11 @@ This line is evaluated in Python, so simple expressions are allowed, e.g.::
 `--C.a='range(3)'` For setting C.a=[0,1,2].
 """.strip() # trim newlines of front and back
 
+# sys.argv can be missing, for example when python is embedded. See the docs
+# for details: http://docs.python.org/2/c-api/intro.html#embedding-python
+if not hasattr(sys, "argv"):
+    sys.argv = [""]
+
 subcommand_description = """
 Subcommands are launched as `{app} cmd [args]`. For information on using
 subcommand 'cmd', do: `{app} cmd -h`.
@@ -83,9 +91,7 @@ def catch_config_error(method, app, *args, **kwargs):
     try:
         return method(app, *args, **kwargs)
     except (TraitError, ArgumentError) as e:
-        app.print_description()
         app.print_help()
-        app.print_examples()
         app.log.fatal("Bad config encountered during initialization:")
         app.log.fatal(str(e))
         app.log.debug("Config at the time: %s", app.config)
@@ -95,6 +101,25 @@ def catch_config_error(method, app, *args, **kwargs):
 class ApplicationError(Exception):
     pass
 
+class LevelFormatter(logging.Formatter):
+    """Formatter with additional `highlevel` record
+    
+    This field is empty if log level is less than highlevel_limit,
+    otherwise it is formatted with self.highlevel_format.
+    
+    Useful for adding 'WARNING' to warning messages,
+    without adding 'INFO' to info, etc.
+    """
+    highlevel_limit = logging.WARN
+    highlevel_format = " %(levelname)s |"
+    
+    def format(self, record):
+        if record.levelno >= self.highlevel_limit:
+            record.highlevel = self.highlevel_format % record.__dict__
+        else:
+            record.highlevel = ""
+        return super(LevelFormatter, self).format(record)
+            
 
 class Application(SingletonConfigurable):
     """A singleton application with full configuration support."""
@@ -120,6 +145,9 @@ class Application(SingletonConfigurable):
 
     # The version string of this application.
     version = Unicode(u'0.0')
+    
+    # the argv used to initialize the application
+    argv = List()
 
     # The log level for the application
     log_level = Enum((0,10,20,30,40,50,'DEBUG','INFO','WARN','ERROR','CRITICAL'),
@@ -128,31 +156,52 @@ class Application(SingletonConfigurable):
                     help="Set the log level by value or name.")
     def _log_level_changed(self, name, old, new):
         """Adjust the log level when log_level is set."""
-        if isinstance(new, basestring):
+        if isinstance(new, string_types):
             new = getattr(logging, new)
             self.log_level = new
         self.log.setLevel(new)
     
-    log_format = Unicode("[%(name)s] %(message)s", config=True,
+    log_datefmt = Unicode("%Y-%m-%d %H:%M:%S", config=True,
+        help="The date format used by logging formatters for %(asctime)s"
+    )
+    def _log_datefmt_changed(self, name, old, new):
+        self._log_format_changed()
+    
+    log_format = Unicode("[%(name)s]%(highlevel)s %(message)s", config=True,
         help="The Logging format template",
     )
+    def _log_format_changed(self, name, old, new):
+        """Change the log formatter when log_format is set."""
+        _log_handler = self.log.handlers[0]
+        _log_formatter = LevelFormatter(new, datefmt=self.log_datefmt)
+        _log_handler.setFormatter(_log_formatter)
+
     log = Instance(logging.Logger)
     def _log_default(self):
         """Start logging for this application.
 
-        The default is to log to stdout using a StreaHandler. The log level
-        starts at loggin.WARN, but this can be adjusted by setting the
-        ``log_level`` attribute.
+        The default is to log to stderr using a StreamHandler, if no default
+        handler already exists.  The log level starts at logging.WARN, but this
+        can be adjusted by setting the ``log_level`` attribute.
         """
         log = logging.getLogger(self.__class__.__name__)
         log.setLevel(self.log_level)
+        log.propagate = False
+        _log = log # copied from Logger.hasHandlers() (new in Python 3.2)
+        while _log:
+            if _log.handlers:
+                return log
+            if not _log.propagate:
+                break
+            else:
+                _log = _log.parent
         if sys.executable.endswith('pythonw.exe'):
             # this should really go to a file, but file-logging is only
             # hooked up in parallel applications
             _log_handler = logging.StreamHandler(open(os.devnull, 'w'))
         else:
             _log_handler = logging.StreamHandler()
-        _log_formatter = logging.Formatter(self.log_format)
+        _log_formatter = LevelFormatter(self.log_format, datefmt=self.log_datefmt)
         _log_handler.setFormatter(_log_formatter)
         log.addHandler(_log_handler)
         return log
@@ -167,10 +216,10 @@ class Application(SingletonConfigurable):
     flags = Dict()
     def _flags_changed(self, name, old, new):
         """ensure flags dict is valid"""
-        for key,value in new.iteritems():
+        for key,value in iteritems(new):
             assert len(value) == 2, "Bad flag: %r:%s"%(key,value)
             assert isinstance(value[0], (dict, Config)), "Bad flag: %r:%s"%(key,value)
-            assert isinstance(value[1], basestring), "Bad flag: %r:%s"%(key,value)
+            assert isinstance(value[1], string_types), "Bad flag: %r:%s"%(key,value)
 
 
     # subcommands for launching other applications
@@ -227,7 +276,7 @@ class Application(SingletonConfigurable):
             for c in cls.mro()[:-3]:
                 classdict[c.__name__] = c
 
-        for alias, longname in self.aliases.iteritems():
+        for alias, longname in iteritems(self.aliases):
             classname, traitname = longname.split('.',1)
             cls = classdict[classname]
 
@@ -239,7 +288,7 @@ class Application(SingletonConfigurable):
                 help[0] = help[0].replace('--%s='%alias, '-%s '%alias)
             lines.extend(help)
         # lines.append('')
-        print os.linesep.join(lines)
+        print(os.linesep.join(lines))
 
     def print_flag_help(self):
         """Print the flag part of the help."""
@@ -247,12 +296,12 @@ class Application(SingletonConfigurable):
             return
 
         lines = []
-        for m, (cfg,help) in self.flags.iteritems():
+        for m, (cfg,help) in iteritems(self.flags):
             prefix = '--' if len(m) > 1 else '-'
             lines.append(prefix+m)
             lines.append(indent(dedent(help.strip())))
         # lines.append('')
-        print os.linesep.join(lines)
+        print(os.linesep.join(lines))
 
     def print_options(self):
         if not self.flags and not self.aliases:
@@ -263,10 +312,10 @@ class Application(SingletonConfigurable):
         for p in wrap_paragraphs(self.option_description):
             lines.append(p)
             lines.append('')
-        print os.linesep.join(lines)
+        print(os.linesep.join(lines))
         self.print_flag_help()
         self.print_alias_help()
-        print
+        print()
 
     def print_subcommands(self):
         """Print the subcommand part of the help."""
@@ -279,42 +328,46 @@ class Application(SingletonConfigurable):
         for p in wrap_paragraphs(self.subcommand_description):
             lines.append(p)
             lines.append('')
-        for subc, (cls, help) in self.subcommands.iteritems():
+        for subc, (cls, help) in iteritems(self.subcommands):
             lines.append(subc)
             if help:
                 lines.append(indent(dedent(help.strip())))
         lines.append('')
-        print os.linesep.join(lines)
+        print(os.linesep.join(lines))
 
     def print_help(self, classes=False):
         """Print the help for each Configurable class in self.classes.
 
         If classes=False (the default), only flags and aliases are printed.
         """
+        self.print_description()
         self.print_subcommands()
         self.print_options()
 
         if classes:
             if self.classes:
-                print "Class parameters"
-                print "----------------"
-                print
+                print("Class parameters")
+                print("----------------")
+                print()
                 for p in wrap_paragraphs(self.keyvalue_description):
-                    print p
-                    print
+                    print(p)
+                    print()
 
             for cls in self.classes:
                 cls.class_print_help()
-                print
+                print()
         else:
-            print "To see all available configurables, use `--help-all`"
-            print
+            print("To see all available configurables, use `--help-all`")
+            print()
+
+        self.print_examples()
+
 
     def print_description(self):
         """Print the application description."""
         for p in wrap_paragraphs(self.description):
-            print p
-            print
+            print(p)
+            print()
 
     def print_examples(self):
         """Print usage and examples.
@@ -323,22 +376,22 @@ class Application(SingletonConfigurable):
         and should contain examples of the application's usage.
         """
         if self.examples:
-            print "Examples"
-            print "--------"
-            print
-            print indent(dedent(self.examples.strip()))
-            print
+            print("Examples")
+            print("--------")
+            print()
+            print(indent(dedent(self.examples.strip())))
+            print()
 
     def print_version(self):
         """Print the version string."""
-        print self.version
+        print(self.version)
 
     def update_config(self, config):
         """Fire the traits events when the config is updated."""
         # Save a copy of the current config.
         newconfig = deepcopy(self.config)
         # Merge the new config into the current one.
-        newconfig._merge(config)
+        newconfig.merge(config)
         # Save the combined config as self.config, which triggers the traits
         # events.
         self.config = newconfig
@@ -348,13 +401,13 @@ class Application(SingletonConfigurable):
         """Initialize a subcommand with argv."""
         subapp,help = self.subcommands.get(subc)
 
-        if isinstance(subapp, basestring):
+        if isinstance(subapp, string_types):
             subapp = import_item(subapp)
 
         # clear existing instances
         self.__class__.clear_instance()
         # instantiate
-        self.subapp = subapp.instance()
+        self.subapp = subapp.instance(config=self.config)
         # and initialize subapp
         self.subapp.initialize(argv)
     
@@ -381,7 +434,7 @@ class Application(SingletonConfigurable):
         # flatten aliases, which have the form:
         # { 'alias' : 'Class.trait' }
         aliases = {}
-        for alias, cls_trait in self.aliases.iteritems():
+        for alias, cls_trait in iteritems(self.aliases):
             cls,trait = cls_trait.split('.',1)
             children = mro_tree[cls]
             if len(children) == 1:
@@ -392,9 +445,9 @@ class Application(SingletonConfigurable):
         # flatten flags, which are of the form:
         # { 'key' : ({'Cls' : {'trait' : value}}, 'help')}
         flags = {}
-        for key, (flagdict, help) in self.flags.iteritems():
+        for key, (flagdict, help) in iteritems(self.flags):
             newflag = {}
-            for cls, subdict in flagdict.iteritems():
+            for cls, subdict in iteritems(flagdict):
                 children = mro_tree[cls]
                 # exactly one descendent, promote flag section
                 if len(children) == 1:
@@ -407,6 +460,7 @@ class Application(SingletonConfigurable):
     def parse_command_line(self, argv=None):
         """Parse the command line arguments."""
         argv = sys.argv[1:] if argv is None else argv
+        self.argv = [ py3compat.cast_unicode(arg) for arg in argv ]
         
         if argv and argv[0] == 'help':
             # turn `ipython help notebook` into `ipython notebook -h`
@@ -419,13 +473,20 @@ class Application(SingletonConfigurable):
                 # it's a subcommand, and *not* a flag or class parameter
                 return self.initialize_subcommand(subc, subargv)
 
-        if '-h' in argv or '--help' in argv or '--help-all' in argv:
-            self.print_description()
-            self.print_help('--help-all' in argv)
-            self.print_examples()
+        # Arguments after a '--' argument are for the script IPython may be
+        # about to run, not IPython iteslf. For arguments parsed here (help and
+        # version), we want to only search the arguments up to the first
+        # occurrence of '--', which we're calling interpreted_argv.
+        try:
+            interpreted_argv = argv[:argv.index('--')]
+        except ValueError:
+            interpreted_argv = argv
+
+        if any(x in interpreted_argv for x in ('-h', '--help-all', '--help')):
+            self.print_help('--help-all' in interpreted_argv)
             self.exit(0)
 
-        if '--version' in argv or '-V' in argv:
+        if '--version' in interpreted_argv or '-V' in interpreted_argv:
             self.print_version()
             self.exit(0)
         
@@ -472,6 +533,16 @@ class Application(SingletonConfigurable):
     def exit(self, exit_status=0):
         self.log.debug("Exiting application: %s" % self.name)
         sys.exit(exit_status)
+
+    @classmethod
+    def launch_instance(cls, argv=None, **kwargs):
+        """Launch a global instance of this Application
+        
+        If a global instance already exists, this reinitializes and starts it
+        """
+        app = cls.instance(**kwargs)
+        app.initialize(argv)
+        app.start()
 
 #-----------------------------------------------------------------------------
 # utility functions, for convenience
