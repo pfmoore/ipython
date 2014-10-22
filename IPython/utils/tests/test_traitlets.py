@@ -1,26 +1,13 @@
 # encoding: utf-8
-"""
-Tests for IPython.utils.traitlets.
+"""Tests for IPython.utils.traitlets."""
 
-Authors:
+# Copyright (c) IPython Development Team.
+# Distributed under the terms of the Modified BSD License.
+# 
+# Adapted from enthought.traits, Copyright (c) Enthought, Inc.,
+# also under the terms of the Modified BSD License.
 
-* Brian Granger
-* Enthought, Inc.  Some of the code in this file comes from enthought.traits
-  and is licensed under the BSD license.  Also, many of the ideas also come
-  from enthought.traits even though our implementation is very different.
-"""
-
-#-----------------------------------------------------------------------------
-#  Copyright (C) 2008-2011  The IPython Development Team
-#
-#  Distributed under the terms of the BSD License.  The full license is in
-#  the file COPYING, distributed as part of this software.
-#-----------------------------------------------------------------------------
-
-#-----------------------------------------------------------------------------
-# Imports
-#-----------------------------------------------------------------------------
-
+import pickle
 import re
 import sys
 from unittest import TestCase
@@ -32,7 +19,8 @@ from IPython.utils.traitlets import (
     HasTraits, MetaHasTraits, TraitType, Any, CBytes, Dict,
     Int, Long, Integer, Float, Complex, Bytes, Unicode, TraitError,
     Undefined, Type, This, Instance, TCPAddress, List, Tuple,
-    ObjectName, DottedObjectName, CRegExp
+    ObjectName, DottedObjectName, CRegExp, link, directional_link,
+    EventfulList, EventfulDict
 )
 from IPython.utils import py3compat
 from IPython.testing.decorators import skipif
@@ -418,6 +406,13 @@ class TestHasTraits(TestCase):
         a = A()
         self.assertEqual(a.trait_metadata('i','config_key'), 'MY_VALUE')
 
+    def test_trait_metadata_default(self):
+        class A(HasTraits):
+            i = Int()
+        a = A()
+        self.assertEqual(a.trait_metadata('i', 'config_key'), None)
+        self.assertEqual(a.trait_metadata('i', 'config_key', 'default'), 'default')
+
     def test_traits(self):
         class A(HasTraits):
             i = Int
@@ -544,6 +539,15 @@ class TestType(TestCase):
 
         self.assertRaises(TraitError, setattr, a, 'klass', 10)
 
+    def test_set_str_klass(self):
+
+        class A(HasTraits):
+            klass = Type()
+
+        a = A(klass='IPython.utils.ipstruct.Struct')
+        from IPython.utils.ipstruct import Struct
+        self.assertEqual(a.klass, Struct)
+
 class TestInstance(TestCase):
 
     def test_basic(self):
@@ -553,6 +557,27 @@ class TestInstance(TestCase):
 
         class A(HasTraits):
             inst = Instance(Foo)
+
+        a = A()
+        self.assertTrue(a.inst is None)
+        a.inst = Foo()
+        self.assertTrue(isinstance(a.inst, Foo))
+        a.inst = Bar()
+        self.assertTrue(isinstance(a.inst, Foo))
+        self.assertRaises(TraitError, setattr, a, 'inst', Foo)
+        self.assertRaises(TraitError, setattr, a, 'inst', Bar)
+        self.assertRaises(TraitError, setattr, a, 'inst', Bah())
+
+    def test_default_klass(self):
+        class Foo(object): pass
+        class Bar(Foo): pass
+        class Bah(object): pass
+
+        class FooInstance(Instance):
+            klass = Foo
+
+        class A(HasTraits):
+            inst = FooInstance()
 
         a = A()
         self.assertTrue(a.inst is None)
@@ -685,6 +710,23 @@ class TraitTestBase(TestCase):
     def test_default_value(self):
         if hasattr(self, '_default_value'):
             self.assertEqual(self._default_value, self.obj.value)
+
+    def test_allow_none(self):
+        if (hasattr(self, '_bad_values') and hasattr(self, '_good_values') and
+        None in self._bad_values):
+            trait=self.obj.traits()['value']
+            try:
+                trait.allow_none = True
+                self._bad_values.remove(None)
+                #skip coerce. Allow None casts None to None.
+                self.assign(None)
+                self.assertEqual(self.obj.value,None)
+                self.test_good_values()
+                self.test_bad_values()
+            finally:
+                #tear down
+                trait.allow_none = False
+                self._bad_values.append(None)
 
     def tearDown(self):
         # restore default value after tests, if set
@@ -843,7 +885,7 @@ class TestObjectName(TraitTestBase):
     _default_value = "abc"
     _good_values = ["a", "gh", "g9", "g_", "_G", u"a345_"]
     _bad_values = [1, "", u"€", "9g", "!", "#abc", "aj@", "a.b", "a()", "a[0]",
-                                                            object(), object]
+                                                        None, object(), object]
     if sys.version_info[0] < 3:
         _bad_values.append(u"þ")
     else:
@@ -858,7 +900,7 @@ class TestDottedObjectName(TraitTestBase):
 
     _default_value = "a.b"
     _good_values = ["A", "y.t", "y765.__repr__", "os.path.join", u"os.path.join"]
-    _bad_values = [1, u"abc.€", "_.@", ".", ".abc", "abc.", ".abc."]
+    _bad_values = [1, u"abc.€", "_.@", ".", ".abc", "abc.", ".abc.", None]
     if sys.version_info[0] < 3:
         _bad_values.append(u"t.þ")
     else:
@@ -875,7 +917,7 @@ class TestTCPAddress(TraitTestBase):
 
     _default_value = ('127.0.0.1',0)
     _good_values = [('localhost',0),('192.168.0.1',1000),('www.google.com',80)]
-    _bad_values = [(0,0),('localhost',10.0),('localhost',-1)]
+    _bad_values = [(0,0),('localhost',10.0),('localhost',-1), None]
 
 class ListTrait(HasTraits):
 
@@ -886,8 +928,32 @@ class TestList(TraitTestBase):
     obj = ListTrait()
 
     _default_value = []
-    _good_values = [[], [1], list(range(10))]
-    _bad_values = [10, [1,'a'], 'a', (1,2)]
+    _good_values = [[], [1], list(range(10)), (1,2)]
+    _bad_values = [10, [1,'a'], 'a']
+    
+    def coerce(self, value):
+        if value is not None:
+            value = list(value)
+        return value
+
+class Foo(object):
+    pass
+
+class InstanceListTrait(HasTraits):
+
+    value = List(Instance(__name__+'.Foo'))
+
+class TestInstanceList(TraitTestBase):
+
+    obj = InstanceListTrait()
+
+    def test_klass(self):
+        """Test that the instance klass is properly assigned."""
+        self.assertIs(self.obj.traits()['value']._trait.klass, Foo)
+
+    _default_value = []
+    _good_values = [[Foo(), Foo(), None], None]
+    _bad_values = [['1', 2,], '1', [Foo]]
 
 class LenListTrait(HasTraits):
 
@@ -898,20 +964,30 @@ class TestLenList(TraitTestBase):
     obj = LenListTrait()
 
     _default_value = [0]
-    _good_values = [[1], list(range(2))]
-    _bad_values = [10, [1,'a'], 'a', (1,2), [], list(range(3))]
+    _good_values = [[1], [1,2], (1,2)]
+    _bad_values = [10, [1,'a'], 'a', [], list(range(3))]
+
+    def coerce(self, value):
+        if value is not None:
+            value = list(value)
+        return value
 
 class TupleTrait(HasTraits):
 
-    value = Tuple(Int)
+    value = Tuple(Int(allow_none=True))
 
 class TestTupleTrait(TraitTestBase):
 
     obj = TupleTrait()
 
     _default_value = None
-    _good_values = [(1,), None,(0,)]
-    _bad_values = [10, (1,2), [1],('a'), ()]
+    _good_values = [(1,), None, (0,), [1], (None,)]
+    _bad_values = [10, (1,2), ('a'), ()]
+
+    def coerce(self, value):
+        if value is not None:
+            value = tuple(value)
+        return value
 
     def test_invalid_args(self):
         self.assertRaises(TypeError, Tuple, 5)
@@ -927,8 +1003,13 @@ class TestLooseTupleTrait(TraitTestBase):
     obj = LooseTupleTrait()
 
     _default_value = (1,2,3)
-    _good_values = [(1,), None, (0,), tuple(range(5)), tuple('hello'), ('a',5), ()]
-    _bad_values = [10, 'hello', [1], []]
+    _good_values = [(1,), None, [1], (0,), tuple(range(5)), tuple('hello'), ('a',5), ()]
+    _bad_values = [10, 'hello', {}]
+
+    def coerce(self, value):
+        if value is not None:
+            value = tuple(value)
+        return value
 
     def test_invalid_args(self):
         self.assertRaises(TypeError, Tuple, 5)
@@ -961,7 +1042,7 @@ class TestCRegExp(TraitTestBase):
 
     _default_value = re.compile(r'')
     _good_values = [r'\d+', re.compile(r'\d+')]
-    _bad_values = [r'(', None, ()]
+    _bad_values = ['(', None, ()]
 
 class DictTrait(HasTraits):
     value = Dict()
@@ -973,3 +1054,255 @@ def test_dict_assignment():
     d['a'] = 5
     nt.assert_equal(d, c.value)
     nt.assert_true(c.value is d)
+
+class TestLink(TestCase):
+    def test_connect_same(self):
+        """Verify two traitlets of the same type can be linked together using link."""
+
+        # Create two simple classes with Int traitlets.
+        class A(HasTraits):
+            value = Int()
+        a = A(value=9)
+        b = A(value=8)
+
+        # Conenct the two classes.
+        c = link((a, 'value'), (b, 'value'))
+
+        # Make sure the values are the same at the point of linking.
+        self.assertEqual(a.value, b.value)
+
+        # Change one of the values to make sure they stay in sync.
+        a.value = 5
+        self.assertEqual(a.value, b.value)
+        b.value = 6
+        self.assertEqual(a.value, b.value)
+
+    def test_link_different(self):
+        """Verify two traitlets of different types can be linked together using link."""
+
+        # Create two simple classes with Int traitlets.
+        class A(HasTraits):
+            value = Int()
+        class B(HasTraits):
+            count = Int()
+        a = A(value=9)
+        b = B(count=8)
+
+        # Conenct the two classes.
+        c = link((a, 'value'), (b, 'count'))
+
+        # Make sure the values are the same at the point of linking.
+        self.assertEqual(a.value, b.count)
+
+        # Change one of the values to make sure they stay in sync.
+        a.value = 5
+        self.assertEqual(a.value, b.count)
+        b.count = 4
+        self.assertEqual(a.value, b.count)
+
+    def test_unlink(self):
+        """Verify two linked traitlets can be unlinked."""
+
+        # Create two simple classes with Int traitlets.
+        class A(HasTraits):
+            value = Int()
+        a = A(value=9)
+        b = A(value=8)
+
+        # Connect the two classes.
+        c = link((a, 'value'), (b, 'value'))
+        a.value = 4
+        c.unlink()
+
+        # Change one of the values to make sure they don't stay in sync.
+        a.value = 5
+        self.assertNotEqual(a.value, b.value)
+
+    def test_callbacks(self):
+        """Verify two linked traitlets have their callbacks called once."""
+
+        # Create two simple classes with Int traitlets.
+        class A(HasTraits):
+            value = Int()
+        class B(HasTraits):
+            count = Int()
+        a = A(value=9)
+        b = B(count=8)
+        
+        # Register callbacks that count.
+        callback_count = []
+        def a_callback(name, old, new):
+            callback_count.append('a')
+        a.on_trait_change(a_callback, 'value')
+        def b_callback(name, old, new):
+            callback_count.append('b')
+        b.on_trait_change(b_callback, 'count')
+
+        # Connect the two classes.
+        c = link((a, 'value'), (b, 'count'))
+
+        # Make sure b's count was set to a's value once.
+        self.assertEqual(''.join(callback_count), 'b')
+        del callback_count[:]
+
+        # Make sure a's value was set to b's count once.
+        b.count = 5
+        self.assertEqual(''.join(callback_count), 'ba')
+        del callback_count[:]
+
+        # Make sure b's count was set to a's value once.
+        a.value = 4
+        self.assertEqual(''.join(callback_count), 'ab')
+        del callback_count[:]
+
+class TestDirectionalLink(TestCase):
+    def test_connect_same(self):
+        """Verify two traitlets of the same type can be linked together using directional_link."""
+
+        # Create two simple classes with Int traitlets.
+        class A(HasTraits):
+            value = Int()
+        a = A(value=9)
+        b = A(value=8)
+
+        # Conenct the two classes.
+        c = directional_link((a, 'value'), (b, 'value'))
+
+        # Make sure the values are the same at the point of linking.
+        self.assertEqual(a.value, b.value)
+
+        # Change one the value of the source and check that it synchronizes the target.
+        a.value = 5
+        self.assertEqual(b.value, 5)
+        # Change one the value of the target and check that it has no impact on the source
+        b.value = 6
+        self.assertEqual(a.value, 5)
+
+    def test_link_different(self):
+        """Verify two traitlets of different types can be linked together using link."""
+
+        # Create two simple classes with Int traitlets.
+        class A(HasTraits):
+            value = Int()
+        class B(HasTraits):
+            count = Int()
+        a = A(value=9)
+        b = B(count=8)
+
+        # Conenct the two classes.
+        c = directional_link((a, 'value'), (b, 'count'))
+
+        # Make sure the values are the same at the point of linking.
+        self.assertEqual(a.value, b.count)
+
+        # Change one the value of the source and check that it synchronizes the target.
+        a.value = 5
+        self.assertEqual(b.count, 5)
+        # Change one the value of the target and check that it has no impact on the source
+        b.value = 6
+        self.assertEqual(a.value, 5)
+
+    def test_unlink(self):
+        """Verify two linked traitlets can be unlinked."""
+
+        # Create two simple classes with Int traitlets.
+        class A(HasTraits):
+            value = Int()
+        a = A(value=9)
+        b = A(value=8)
+
+        # Connect the two classes.
+        c = directional_link((a, 'value'), (b, 'value'))
+        a.value = 4
+        c.unlink()
+
+        # Change one of the values to make sure they don't stay in sync.
+        a.value = 5
+        self.assertNotEqual(a.value, b.value)
+
+class Pickleable(HasTraits):
+    i = Int()
+    j = Int()
+    
+    def _i_default(self):
+        return 1
+    
+    def _i_changed(self, name, old, new):
+        self.j = new
+
+def test_pickle_hastraits():
+    c = Pickleable()
+    for protocol in range(pickle.HIGHEST_PROTOCOL + 1):
+        p = pickle.dumps(c, protocol)
+        c2 = pickle.loads(p)
+        nt.assert_equal(c2.i, c.i)
+        nt.assert_equal(c2.j, c.j)
+
+    c.i = 5
+    for protocol in range(pickle.HIGHEST_PROTOCOL + 1):
+        p = pickle.dumps(c, protocol)
+        c2 = pickle.loads(p)
+        nt.assert_equal(c2.i, c.i)
+        nt.assert_equal(c2.j, c.j)
+
+class TestEventful(TestCase):
+
+    def test_list(self):
+        """Does the EventfulList work?"""
+        event_cache = []
+
+        class A(HasTraits):
+            x = EventfulList([c for c in 'abc'])
+        a = A()
+        a.x.on_events(lambda i, x: event_cache.append('insert'), \
+            lambda i, x: event_cache.append('set'), \
+            lambda i: event_cache.append('del'), \
+            lambda: event_cache.append('reverse'), \
+            lambda *p, **k: event_cache.append('sort'))
+
+        a.x.remove('c')
+        # ab
+        a.x.insert(0, 'z')
+        # zab
+        del a.x[1]
+        # zb
+        a.x.reverse()
+        # bz 
+        a.x[1] = 'o'
+        # bo
+        a.x.append('a')
+        # boa
+        a.x.sort()
+        # abo
+
+        # Were the correct events captured?
+        self.assertEqual(event_cache, ['del', 'insert', 'del', 'reverse', 'set', 'set', 'sort'])
+
+        # Is the output correct?
+        self.assertEqual(a.x, [c for c in 'abo'])
+
+    def test_dict(self):
+        """Does the EventfulDict work?"""
+        event_cache = []
+
+        class A(HasTraits):
+            x = EventfulDict({c: c for c in 'abc'})
+        a = A()
+        a.x.on_events(lambda k, v: event_cache.append('add'), \
+            lambda k, v: event_cache.append('set'), \
+            lambda k: event_cache.append('del'))
+
+        del a.x['c']
+        # ab
+        a.x['z'] = 1
+        # abz
+        a.x['z'] = 'z'
+        # abz
+        a.x.pop('a')
+        # bz 
+
+        # Were the correct events captured?
+        self.assertEqual(event_cache, ['del', 'add', 'set', 'del'])
+
+        # Is the output correct?
+        self.assertEqual(a.x, {c: c for c in 'bz'})

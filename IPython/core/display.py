@@ -21,11 +21,19 @@ from __future__ import print_function
 
 import os
 import struct
+import mimetypes
 
+from IPython.core.formatters import _safe_get_formatter_method
 from IPython.utils.py3compat import (string_types, cast_bytes_py2, cast_unicode,
                                      unicode_type)
+from IPython.testing.skipdoctest import skip_doctest
 
-from .displaypub import publish_display_data
+__all__ = ['display', 'display_pretty', 'display_html', 'display_markdown',
+'display_svg', 'display_png', 'display_jpeg', 'display_latex', 'display_json',
+'display_javascript', 'display_pdf', 'DisplayObject', 'TextDisplayObject',
+'Pretty', 'HTML', 'Markdown', 'Math', 'Latex', 'SVG', 'JSON', 'Javascript',
+'Image', 'clear_output', 'set_matplotlib_formats', 'set_matplotlib_close',
+'publish_display_data']
 
 #-----------------------------------------------------------------------------
 # utility functions
@@ -77,6 +85,48 @@ def _display_mimetype(mimetype, objs, raw=False, metadata=None):
 # Main functions
 #-----------------------------------------------------------------------------
 
+def publish_display_data(data, metadata=None, source=None):
+    """Publish data and metadata to all frontends.
+
+    See the ``display_data`` message in the messaging documentation for
+    more details about this message type.
+
+    The following MIME types are currently implemented:
+
+    * text/plain
+    * text/html
+    * text/markdown
+    * text/latex
+    * application/json
+    * application/javascript
+    * image/png
+    * image/jpeg
+    * image/svg+xml
+
+    Parameters
+    ----------
+    data : dict
+        A dictionary having keys that are valid MIME types (like
+        'text/plain' or 'image/svg+xml') and values that are the data for
+        that MIME type. The data itself must be a JSON'able data
+        structure. Minimally all data should have the 'text/plain' data,
+        which can be displayed by all frontends. If more than the plain
+        text is given, it is up to the frontend to decide which
+        representation to use.
+    metadata : dict
+        A dictionary for metadata related to the data. This can contain
+        arbitrary key, value pairs that frontends can use to interpret
+        the data. mime-type keys matching those in data can be used
+        to specify metadata about particular representations.
+    source : str, deprecated
+        Unused.
+        """
+    from IPython.core.interactiveshell import InteractiveShell
+    InteractiveShell.instance().display_pub.publish(
+        data=data,
+        metadata=metadata,
+    )
+
 def display(*objs, **kwargs):
     """Display a Python object in all frontends.
 
@@ -110,17 +160,28 @@ def display(*objs, **kwargs):
 
     from IPython.core.interactiveshell import InteractiveShell
 
-    if raw:
-        for obj in objs:
-            publish_display_data('display', obj, metadata)
-    else:
+    if not raw:
         format = InteractiveShell.instance().display_formatter.format
-        for obj in objs:
+
+    for obj in objs:
+
+        # If _ipython_display_ is defined, use that to display this object.
+        display_method = _safe_get_formatter_method(obj, '_ipython_display_')
+        if display_method is not None:
+            try:
+                display_method(**kwargs)
+            except NotImplementedError:
+                pass
+            else:
+                continue
+        if raw:
+            publish_display_data(data=obj, metadata=metadata)
+        else:
             format_dict, md_dict = format(obj, include=include, exclude=exclude)
             if metadata:
                 # kwarg-specified metadata gets precedence
                 _merge(md_dict, metadata)
-            publish_display_data('display', format_dict, md_dict)
+            publish_display_data(data=format_dict, metadata=md_dict)
 
 
 def display_pretty(*objs, **kwargs):
@@ -155,6 +216,24 @@ def display_html(*objs, **kwargs):
         Metadata to be associated with the specific mimetype output.
     """
     _display_mimetype('text/html', objs, **kwargs)
+
+
+def display_markdown(*objs, **kwargs):
+    """Displays the Markdown representation of an object.
+
+    Parameters
+    ----------
+    objs : tuple of objects
+        The Python objects to display, or if raw=True raw markdown data to
+        display.
+    raw : bool
+        Are the data objects raw data or Python objects that need to be
+        formatted before display? [default: False]
+    metadata : dict (optional)
+        Metadata to be associated with the specific mimetype output.
+    """
+
+    _display_mimetype('text/markdown', objs, **kwargs)
 
 
 def display_svg(*objs, **kwargs):
@@ -260,6 +339,24 @@ def display_javascript(*objs, **kwargs):
     """
     _display_mimetype('application/javascript', objs, **kwargs)
 
+
+def display_pdf(*objs, **kwargs):
+    """Display the PDF representation of an object.
+
+    Parameters
+    ----------
+    objs : tuple of objects
+        The Python objects to display, or if raw=True raw javascript data to
+        display.
+    raw : bool
+        Are the data objects raw data or Python objects that need to be
+        formatted before display? [default: False]
+    metadata : dict (optional)
+        Metadata to be associated with the specific mimetype output.
+    """
+    _display_mimetype('application/pdf', objs, **kwargs)
+
+
 #-----------------------------------------------------------------------------
 # Smart classes
 #-----------------------------------------------------------------------------
@@ -269,6 +366,7 @@ class DisplayObject(object):
     """An object that wraps data to be displayed."""
 
     _read_flags = 'r'
+    _show_mem_addr = False
 
     def __init__(self, data=None, url=None, filename=None):
         """Create a display object given raw data.
@@ -304,6 +402,19 @@ class DisplayObject(object):
         self.filename = None if filename is None else unicode_type(filename)
 
         self.reload()
+        self._check_data()
+
+    def __repr__(self):
+        if not self._show_mem_addr:
+            cls = self.__class__
+            r = "<%s.%s object>" % (cls.__module__, cls.__name__)
+        else:
+            r = super(DisplayObject, self).__repr__()
+        return r
+
+    def _check_data(self):
+        """Override in subclasses if there's something to check."""
+        pass
 
     def reload(self):
         """Reload the raw data from file or URL."""
@@ -312,8 +423,11 @@ class DisplayObject(object):
                 self.data = f.read()
         elif self.url is not None:
             try:
-                import urllib2
-                response = urllib2.urlopen(self.url)
+                try:
+                    from urllib.request import urlopen  # Py3
+                except ImportError:
+                    from urllib2 import urlopen
+                response = urlopen(self.url)
                 self.data = response.read()
                 # extract encoding from header, if there is one:
                 encoding = None
@@ -328,13 +442,19 @@ class DisplayObject(object):
             except:
                 self.data = None
 
-class Pretty(DisplayObject):
+class TextDisplayObject(DisplayObject):
+    """Validate that display data is text"""
+    def _check_data(self):
+        if self.data is not None and not isinstance(self.data, string_types):
+            raise TypeError("%s expects text, not %r" % (self.__class__.__name__, self.data))
+
+class Pretty(TextDisplayObject):
 
     def _repr_pretty_(self):
         return self.data
 
 
-class HTML(DisplayObject):
+class HTML(TextDisplayObject):
 
     def _repr_html_(self):
         return self.data
@@ -348,14 +468,20 @@ class HTML(DisplayObject):
         return self._repr_html_()
 
 
-class Math(DisplayObject):
+class Markdown(TextDisplayObject):
+
+    def _repr_markdown_(self):
+        return self.data
+
+
+class Math(TextDisplayObject):
 
     def _repr_latex_(self):
         s = self.data.strip('$')
         return "$$%s$$" % s
 
 
-class Latex(DisplayObject):
+class Latex(TextDisplayObject):
 
     def _repr_latex_(self):
         return self.data
@@ -395,7 +521,7 @@ class SVG(DisplayObject):
         return self.data
 
 
-class JSON(DisplayObject):
+class JSON(TextDisplayObject):
 
     def _repr_json_(self):
         return self.data
@@ -412,7 +538,7 @@ lib_t1 = """$.getScript("%s", function () {
 lib_t2 = """});
 """
 
-class Javascript(DisplayObject):
+class Javascript(TextDisplayObject):
 
     def __init__(self, data=None, url=None, filename=None, lib=None, css=None):
         """Create a Javascript display object given raw data.
@@ -423,9 +549,8 @@ class Javascript(DisplayObject):
         downloaded and then displayed.
 
         In the Notebook, the containing element will be available as `element`,
-        and jQuery will be available.  The output area starts hidden, so if
-        the js appends content to `element` that should be visible, then
-        it must call `container.show()` to unhide the area.
+        and jQuery will be available.  Content appended to `element` will be
+        visible in the output area. 
 
         Parameters
         ----------
@@ -657,6 +782,90 @@ class Image(DisplayObject):
     def _find_ext(self, s):
         return unicode_type(s.split('.')[-1].lower())
 
+class Video(DisplayObject):
+
+    def __init__(self, data=None, url=None, filename=None, embed=None, mimetype=None):
+        """Create a video object given raw data or an URL.
+
+        When this object is returned by an input cell or passed to the
+        display function, it will result in the video being displayed
+        in the frontend.
+
+        Parameters
+        ----------
+        data : unicode, str or bytes
+            The raw image data or a URL or filename to load the data from.
+            This always results in embedded image data.
+        url : unicode
+            A URL to download the data from. If you specify `url=`,
+            the image data will not be embedded unless you also specify `embed=True`.
+        filename : unicode
+            Path to a local file to load the data from.
+            Videos from a file are always embedded.
+        embed : bool
+            Should the image data be embedded using a data URI (True) or be
+            loaded using an <img> tag. Set this to True if you want the image
+            to be viewable later with no internet connection in the notebook.
+
+            Default is `True`, unless the keyword argument `url` is set, then
+            default value is `False`.
+
+            Note that QtConsole is not able to display images if `embed` is set to `False`
+        mimetype: unicode
+            Specify the mimetype in case you load in a encoded video.
+        Examples
+        --------
+        Video('https://archive.org/download/Sita_Sings_the_Blues/Sita_Sings_the_Blues_small.mp4')
+        Video('path/to/video.mp4')
+        Video('path/to/video.mp4', embed=False)
+        """
+        if url is None and (data.startswith('http') or data.startswith('https')):
+            url = data
+            data = None
+            embed = False
+        elif os.path.exists(data):
+            filename = data
+            data = None
+
+        self.mimetype = mimetype
+        self.embed = embed if embed is not None else (filename is not None)
+        super(Video, self).__init__(data=data, url=url, filename=filename)
+
+    def _repr_html_(self):
+        # External URLs and potentially local files are not embedded into the
+        # notebook output.
+        if not self.embed:
+            url = self.url if self.url is not None else self.filename
+            output = """<video src="{0}" controls>
+      Your browser does not support the <code>video</code> element.
+    </video>""".format(url)
+            return output
+        # Embedded videos uses base64 encoded videos.
+        if self.filename is not None:
+            mimetypes.init()
+            mimetype, encoding = mimetypes.guess_type(self.filename)
+
+            video = open(self.filename, 'rb').read()
+            video_encoded = video.encode('base64')
+        else:
+            video_encoded = self.data
+            mimetype = self.mimetype
+        output = """<video controls>
+ <source src="data:{0};base64,{1}" type="{0}">
+ Your browser does not support the video tag.
+ </video>""".format(mimetype, video_encoded)
+        return output
+
+    def reload(self):
+        # TODO
+        pass
+
+    def _repr_png_(self):
+        # TODO
+        pass
+    def _repr_jpeg_(self):
+        # TODO
+        pass
 
 def clear_output(wait=False):
     """Clear the output of the current cell receiving output.
@@ -674,3 +883,62 @@ def clear_output(wait=False):
         io.stdout.flush()
         print('\033[2K\r', file=io.stderr, end='')
         io.stderr.flush()
+
+
+@skip_doctest
+def set_matplotlib_formats(*formats, **kwargs):
+    """Select figure formats for the inline backend. Optionally pass quality for JPEG.
+
+    For example, this enables PNG and JPEG output with a JPEG quality of 90%::
+
+        In [1]: set_matplotlib_formats('png', 'jpeg', quality=90)
+
+    To set this in your config files use the following::
+    
+        c.InlineBackend.figure_formats = {'png', 'jpeg'}
+        c.InlineBackend.print_figure_kwargs.update({'quality' : 90})
+
+    Parameters
+    ----------
+    *formats : strs
+        One or more figure formats to enable: 'png', 'retina', 'jpeg', 'svg', 'pdf'.
+    **kwargs :
+        Keyword args will be relayed to ``figure.canvas.print_figure``.
+    """
+    from IPython.core.interactiveshell import InteractiveShell
+    from IPython.core.pylabtools import select_figure_formats
+    from IPython.kernel.zmq.pylab.config import InlineBackend
+    # build kwargs, starting with InlineBackend config
+    kw = {}
+    cfg = InlineBackend.instance()
+    kw.update(cfg.print_figure_kwargs)
+    kw.update(**kwargs)
+    shell = InteractiveShell.instance()
+    select_figure_formats(shell, formats, **kw)
+
+@skip_doctest
+def set_matplotlib_close(close=True):
+    """Set whether the inline backend closes all figures automatically or not.
+    
+    By default, the inline backend used in the IPython Notebook will close all
+    matplotlib figures automatically after each cell is run. This means that
+    plots in different cells won't interfere. Sometimes, you may want to make
+    a plot in one cell and then refine it in later cells. This can be accomplished
+    by::
+    
+        In [1]: set_matplotlib_close(False)
+    
+    To set this in your config files use the following::
+    
+        c.InlineBackend.close_figures = False
+    
+    Parameters
+    ----------
+    close : bool
+        Should all matplotlib figures be automatically closed after each cell is
+        run?
+    """
+    from IPython.kernel.zmq.pylab.config import InlineBackend
+    cfg = InlineBackend.instance()
+    cfg.close_figures = close
+

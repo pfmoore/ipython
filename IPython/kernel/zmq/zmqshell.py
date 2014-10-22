@@ -10,20 +10,18 @@ implementation that doesn't rely on so much monkeypatching.
 But this lets us maintain a fully working IPython as we develop the new
 machinery.  This should thus be thought of as scaffolding.
 """
-#-----------------------------------------------------------------------------
-# Imports
-#-----------------------------------------------------------------------------
+
+# Copyright (c) IPython Development Team.
+# Distributed under the terms of the Modified BSD License.
+
 from __future__ import print_function
 
-# Stdlib
 import os
 import sys
 import time
 
-# System library imports
 from zmq.eventloop import ioloop
 
-# Our own
 from IPython.core.interactiveshell import (
     InteractiveShell, InteractiveShellABC
 )
@@ -34,6 +32,7 @@ from IPython.core.error import UsageError
 from IPython.core.magics import MacroToEdit, CodeMagics
 from IPython.core.magic import magics_class, line_magic, Magics
 from IPython.core.payloadpage import install_payload_page
+from IPython.core.usage import default_gui_banner
 from IPython.display import display, Javascript
 from IPython.kernel.inprocess.socket import SocketABC
 from IPython.kernel import (
@@ -50,7 +49,6 @@ from IPython.utils.warn import error
 from IPython.kernel.zmq.displayhook import ZMQShellDisplayHook
 from IPython.kernel.zmq.datapub import ZMQDataPublisher
 from IPython.kernel.zmq.session import extract_header
-from IPython.kernel.comm import CommManager
 from .session import Session
 
 #-----------------------------------------------------------------------------
@@ -74,13 +72,12 @@ class ZMQDisplayPublisher(DisplayPublisher):
         sys.stdout.flush()
         sys.stderr.flush()
 
-    def publish(self, source, data, metadata=None):
+    def publish(self, data, metadata=None, source=None):
         self._flush_streams()
         if metadata is None:
             metadata = {}
-        self._validate_data(source, data, metadata)
+        self._validate_data(data, metadata)
         content = {}
-        content['source'] = source
         content['data'] = encode_images(data)
         content['metadata'] = metadata
         self.session.send(
@@ -90,11 +87,7 @@ class ZMQDisplayPublisher(DisplayPublisher):
 
     def clear_output(self, wait=False):
         content = dict(wait=wait)
-
-        print('\r', file=sys.stdout, end='')
-        print('\r', file=sys.stderr, end='')
         self._flush_streams()
-        
         self.session.send(
             self.pub_socket, u'clear_output', content,
             parent=self.parent_header, ident=self.topic,
@@ -197,116 +190,64 @@ class KernelMagics(Magics):
         temporary file and will execute the contents of this file when you
         close it (don't forget to save it!).
 
-
         Options:
 
-        -n <number>: open the editor at a specified line number.  By default,
-        the IPython editor hook uses the unix syntax 'editor +N filename', but
-        you can configure this by providing your own modified hook if your
-        favorite editor supports line-number specifications with a different
-        syntax.
+        -n <number>
+          Open the editor at a specified line number. By default, the IPython
+          editor hook uses the unix syntax 'editor +N filename', but you can
+          configure this by providing your own modified hook if your favorite
+          editor supports line-number specifications with a different syntax.
 
-        -p: this will call the editor with the same data as the previous time
-        it was used, regardless of how long ago (in your current session) it
-        was.
+        -p
+          Call the editor with the same data as the previous time it was used,
+          regardless of how long ago (in your current session) it was.
 
-        -r: use 'raw' input.  This option only applies to input taken from the
-        user's history.  By default, the 'processed' history is used, so that
-        magics are loaded in their transformed version to valid Python.  If
-        this option is given, the raw input as typed as the command line is
-        used instead.  When you exit the editor, it will be executed by
-        IPython's own processor.
-
-        -x: do not execute the edited code immediately upon exit. This is
-        mainly useful if you are editing programs which need to be called with
-        command line arguments, which you can then do using %run.
-
+        -r
+          Use 'raw' input. This option only applies to input taken from the
+          user's history.  By default, the 'processed' history is used, so that
+          magics are loaded in their transformed version to valid Python.  If
+          this option is given, the raw input as typed as the command line is
+          used instead.  When you exit the editor, it will be executed by
+          IPython's own processor.
 
         Arguments:
 
         If arguments are given, the following possibilites exist:
 
         - The arguments are numbers or pairs of colon-separated numbers (like
-        1 4:8 9). These are interpreted as lines of previous input to be
-        loaded into the editor. The syntax is the same of the %macro command.
+          1 4:8 9). These are interpreted as lines of previous input to be
+          loaded into the editor. The syntax is the same of the %macro command.
 
         - If the argument doesn't start with a number, it is evaluated as a
-        variable and its contents loaded into the editor. You can thus edit
-        any string which contains python code (including the result of
-        previous edits).
+          variable and its contents loaded into the editor. You can thus edit
+          any string which contains python code (including the result of
+          previous edits).
 
         - If the argument is the name of an object (other than a string),
-        IPython will try to locate the file where it was defined and open the
-        editor at the point where it is defined. You can use `%edit function`
-        to load an editor exactly at the point where 'function' is defined,
-        edit it and have the file be executed automatically.
+          IPython will try to locate the file where it was defined and open the
+          editor at the point where it is defined. You can use ``%edit function``
+          to load an editor exactly at the point where 'function' is defined,
+          edit it and have the file be executed automatically.
 
-        If the object is a macro (see %macro for details), this opens up your
-        specified editor with a temporary file containing the macro's data.
-        Upon exit, the macro is reloaded with the contents of the file.
+          If the object is a macro (see %macro for details), this opens up your
+          specified editor with a temporary file containing the macro's data.
+          Upon exit, the macro is reloaded with the contents of the file.
 
-        Note: opening at an exact line is only supported under Unix, and some
-        editors (like kedit and gedit up to Gnome 2.8) do not understand the
-        '+NUMBER' parameter necessary for this feature. Good editors like
-        (X)Emacs, vi, jed, pico and joe all do.
+          Note: opening at an exact line is only supported under Unix, and some
+          editors (like kedit and gedit up to Gnome 2.8) do not understand the
+          '+NUMBER' parameter necessary for this feature. Good editors like
+          (X)Emacs, vi, jed, pico and joe all do.
 
         - If the argument is not found as a variable, IPython will look for a
-        file with that name (adding .py if necessary) and load it into the
-        editor. It will execute its contents with execfile() when you exit,
-        loading any code in the file into your interactive namespace.
+          file with that name (adding .py if necessary) and load it into the
+          editor. It will execute its contents with execfile() when you exit,
+          loading any code in the file into your interactive namespace.
 
-        After executing your code, %edit will return as output the code you
-        typed in the editor (except when it was an existing file). This way
-        you can reload the code in further invocations of %edit as a variable,
-        via _<NUMBER> or Out[<NUMBER>], where <NUMBER> is the prompt number of
-        the output.
+        Unlike in the terminal, this is designed to use a GUI editor, and we do
+        not know when it has closed. So the file you edit will not be
+        automatically executed or printed.
 
         Note that %edit is also available through the alias %ed.
-
-        This is an example of creating a simple function inside the editor and
-        then modifying it. First, start up the editor:
-
-        In [1]: ed
-        Editing... done. Executing edited code...
-        Out[1]: 'def foo():n    print "foo() was defined in an editing session"n'
-
-        We can then call the function foo():
-
-        In [2]: foo()
-        foo() was defined in an editing session
-
-        Now we edit foo.  IPython automatically loads the editor with the
-        (temporary) file where foo() was previously defined:
-
-        In [3]: ed foo
-        Editing... done. Executing edited code...
-
-        And if we call foo() again we get the modified version:
-
-        In [4]: foo()
-        foo() has now been changed!
-
-        Here is an example of how to edit a code snippet successive
-        times. First we call the editor:
-
-        In [5]: ed
-        Editing... done. Executing edited code...
-        hello
-        Out[5]: "print 'hello'n"
-
-        Now we call it again with the previous output (stored in _):
-
-        In [6]: ed _
-        Editing... done. Executing edited code...
-        hello world
-        Out[6]: "print 'hello world'n"
-
-        Now we call it with the output #8 (stored in _8, also as Out[8]):
-
-        In [7]: ed _8
-        Editing... done. Executing edited code...
-        hello again
-        Out[7]: "print 'hello again'n"
         """
 
         opts,args = self.parse_options(parameter_s,'prn:')
@@ -480,6 +421,9 @@ class ZMQInteractiveShell(InteractiveShell):
     data_pub_class = Type(ZMQDataPublisher)
     kernel = Any()
     parent_header = Any()
+    
+    def _banner1_default(self):
+        return default_gui_banner
 
     # Override the traitlet in the parent class, because there's no point using
     # readline for the kernel. Can be removed when the readline code is moved
@@ -544,7 +488,7 @@ class ZMQInteractiveShell(InteractiveShell):
 
     def ask_exit(self):
         """Engage the exit actions."""
-        self.exit_now = True
+        self.exit_now = (not self.keepkernel_on_exit)
         payload = dict(
             source='ask_exit',
             exit=True,
@@ -553,6 +497,9 @@ class ZMQInteractiveShell(InteractiveShell):
         self.payload_manager.write_payload(payload)
 
     def _showtraceback(self, etype, evalue, stb):
+        # try to preserve ordering of tracebacks and print statements
+        sys.stdout.flush()
+        sys.stderr.flush()
 
         exc_content = {
             u'traceback' : stb,
@@ -565,9 +512,9 @@ class ZMQInteractiveShell(InteractiveShell):
         # to pick up
         topic = None
         if dh.topic:
-            topic = dh.topic.replace(b'pyout', b'pyerr')
+            topic = dh.topic.replace(b'execute_result', b'error')
         
-        exc_msg = dh.session.send(dh.pub_socket, u'pyerr', json_clean(exc_content), dh.parent_header, ident=topic)
+        exc_msg = dh.session.send(dh.pub_socket, u'error', json_clean(exc_content), dh.parent_header, ident=topic)
 
         # FIXME - Hack: store exception info in shell object.  Right now, the
         # caller is reading this info after the fact, we need to fix this logic
@@ -615,10 +562,6 @@ class ZMQInteractiveShell(InteractiveShell):
         super(ZMQInteractiveShell, self).init_magics()
         self.register_magics(KernelMagics)
         self.magics_manager.register_alias('ed', 'edit')
-    
-    def init_comms(self):
-        self.comm_manager = CommManager(shell=self, parent=self)
-        self.configurables.append(self.comm_manager)
 
 
 InteractiveShellABC.register(ZMQInteractiveShell)

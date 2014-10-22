@@ -1,6 +1,4 @@
-"""
-Exporter that exports Basic HTML.
-"""
+"""HTML Exporter class"""
 
 #-----------------------------------------------------------------------------
 # Copyright (c) 2013, the IPython Development Team.
@@ -14,9 +12,9 @@ Exporter that exports Basic HTML.
 # Imports
 #-----------------------------------------------------------------------------
 
-from IPython.utils.traitlets import Unicode, List
+import os
 
-from IPython.nbconvert import preprocessors
+from IPython.nbconvert.filters.highlight import Highlight2HTML
 from IPython.config import Config
 
 from .templateexporter import TemplateExporter
@@ -33,17 +31,23 @@ class HTMLExporter(TemplateExporter):
     filters, just change the 'template_file' config option.  
     """
     
-    file_extension = Unicode(
-        'html', config=True, 
-        help="Extension of the file that should be written to disk"
-        )
+    def _file_extension_default(self):
+        return 'html'
 
-    default_template = Unicode('full', config=True, help="""Flavor of the data 
-        format to use.  I.E. 'full' or 'basic'""")
+    def _default_template_path_default(self):
+        return os.path.join("..", "templates", "html")
 
+    def _template_file_default(self):
+        return 'full'
+    
+    output_mimetype = 'text/html'
+    
     @property
     def default_config(self):
         c = Config({
+            'NbConvertBase': {
+                'display_data_priority' : ['javascript', 'html', 'application/pdf', 'svg', 'latex', 'png', 'jpg', 'jpeg' , 'text']
+                },
             'CSSHTMLHeaderPreprocessor':{
                 'enabled':True
                 },
@@ -53,3 +57,10 @@ class HTMLExporter(TemplateExporter):
             })
         c.merge(super(HTMLExporter,self).default_config)
         return c
+
+    def from_notebook_node(self, nb, resources=None, **kw):
+        kernelspec = nb.metadata.get('kernelspec', {})
+        lexer = kernelspec.get('pygments_lexer', kernelspec.get('language', None))
+        self.register_filter('highlight_code',
+                             Highlight2HTML(pygments_lexer=lexer, parent=self))
+        return super(HTMLExporter, self).from_notebook_node(nb, resources, **kw)

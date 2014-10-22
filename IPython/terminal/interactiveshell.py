@@ -20,7 +20,7 @@ import os
 import sys
 
 from IPython.core.error import TryNext, UsageError
-from IPython.core.usage import interactive_usage, default_banner
+from IPython.core.usage import interactive_usage
 from IPython.core.inputsplitter import IPythonInputSplitter
 from IPython.core.interactiveshell import InteractiveShell, InteractiveShellABC
 from IPython.core.magic import Magics, magics_class, line_magic
@@ -41,22 +41,32 @@ from IPython.utils.traitlets import Integer, CBool, Unicode
 def get_default_editor():
     try:
         ed = os.environ['EDITOR']
+        if not py3compat.PY3:
+            ed = ed.decode()
+        return ed
     except KeyError:
-        if os.name == 'posix':
-            ed = 'vi'  # the only one guaranteed to be there!
-        else:
-            ed = 'notepad' # same in Windows!
-    return ed
+        pass
+    except UnicodeError:
+        warn("$EDITOR environment variable is not pure ASCII. Using platform "
+             "default editor.")
 
+    if os.name == 'posix':
+        return 'vi'  # the only one guaranteed to be there!
+    else:
+        return 'notepad' # same in Windows!
 
-def get_pasted_lines(sentinel, l_input=py3compat.input):
+def get_pasted_lines(sentinel, l_input=py3compat.input, quiet=False):
     """ Yield pasted lines until the user enters the given sentinel value.
     """
-    print("Pasting code; enter '%s' alone on the line to stop or use Ctrl-D." \
-          % sentinel)
+    if not quiet:
+        print("Pasting code; enter '%s' alone on the line to stop or use Ctrl-D." \
+              % sentinel)
+        prompt = ":"
+    else:
+        prompt = ""
     while True:
         try:
-            l = l_input(':')
+            l = l_input(prompt)
             if l == sentinel:
                 return
             else:
@@ -127,7 +137,7 @@ class TerminalMagics(Magics):
 
         You must terminate the block with '--' (two minus-signs) or Ctrl-D
         alone on the line. You can also provide your own sentinel with '%paste
-        -s %%' ('%%' is the new sentinel for this operation)
+        -s %%' ('%%' is the new sentinel for this operation).
 
         The block is dedented prior to execution to enable execution of method
         definitions. '>' and '+' characters at the beginning of a line are
@@ -141,6 +151,7 @@ class TerminalMagics(Magics):
         dedenting or executing it (preceding >>> and + is still stripped)
 
         '%cpaste -r' re-executes the block previously entered by cpaste.
+        '%cpaste -q' suppresses any additional output messages.
 
         Do not be alarmed by garbled output on Windows (it's a readline bug).
         Just press enter and type -- (and press enter again) and the block
@@ -163,13 +174,15 @@ class TerminalMagics(Magics):
           :--
           Hello world!
         """
-        opts, name = self.parse_options(parameter_s, 'rs:', mode='string')
+        opts, name = self.parse_options(parameter_s, 'rqs:', mode='string')
         if 'r' in opts:
             self.rerun_pasted()
             return
 
+        quiet = ('q' in opts)
+
         sentinel = opts.get('s', '--')
-        block = '\n'.join(get_pasted_lines(sentinel))
+        block = '\n'.join(get_pasted_lines(sentinel, quiet=quiet))
         self.store_or_execute(block, name)
 
     @line_magic
@@ -191,8 +204,7 @@ class TerminalMagics(Magics):
         This assigns the pasted block to variable 'foo' as string, without
         executing it (preceding >>> and + is still stripped).
 
-        Options
-        -------
+        Options:
 
           -r: re-executes the block previously entered by cpaste.
 
@@ -246,13 +258,6 @@ class TerminalInteractiveShell(InteractiveShell):
 
     autoedit_syntax = CBool(False, config=True,
         help="auto editing of files with syntax errors.")
-    banner = Unicode('')
-    banner1 = Unicode(default_banner, config=True,
-        help="""The part of the banner to be printed before the profile"""
-    )
-    banner2 = Unicode('', config=True,
-        help="""The part of the banner to be printed after the profile"""
-    )
     confirm_exit = CBool(True, config=True,
         help="""
         Set to confirm when you try to exit IPython with an EOF (Control-D
@@ -262,8 +267,7 @@ class TerminalInteractiveShell(InteractiveShell):
     # This display_banner only controls whether or not self.show_banner()
     # is called when mainloop/interact are called.  The default is False
     # because for the terminal based application, the banner behavior
-    # is controlled by Global.display_banner, which IPythonApp looks at
-    # to determine if *it* should call show_banner() by hand or not.
+    # is controlled by the application.
     display_banner = CBool(False) # This isn't configurable!
     embedded = CBool(False)
     embedded_active = CBool(False)
@@ -288,6 +292,7 @@ class TerminalInteractiveShell(InteractiveShell):
     term_title = CBool(False, config=True,
         help="Enable auto setting the terminal title."
     )
+    usage = Unicode(interactive_usage)
     
     # This `using_paste_magics` is used to detect whether the code is being
     # executed via paste magics functions
@@ -305,23 +310,7 @@ class TerminalInteractiveShell(InteractiveShell):
         except ValueError as e:
             raise UsageError("%s" % e)
     
-    def __init__(self, config=None, ipython_dir=None, profile_dir=None,
-                 user_ns=None, user_module=None, custom_exceptions=((),None),
-                 usage=None, banner1=None, banner2=None, display_banner=None,
-                 **kwargs):
-
-        super(TerminalInteractiveShell, self).__init__(
-            config=config, ipython_dir=ipython_dir, profile_dir=profile_dir, user_ns=user_ns,
-            user_module=user_module, custom_exceptions=custom_exceptions,
-            **kwargs
-        )
-        # use os.system instead of utils.process.system by default,
-        # because piped system doesn't make sense in the Terminal:
-        self.system = self.system_raw
-
-        self.init_term_title()
-        self.init_usage(usage)
-        self.init_banner(banner1, banner2, display_banner)
+    system = InteractiveShell.system_raw
 
     #-------------------------------------------------------------------------
     # Overrides of init stages
@@ -343,6 +332,9 @@ class TerminalInteractiveShell(InteractiveShell):
         else:
             num_lines_bot = self.separate_in.count('\n')+1
             return self.screen_length - num_lines_bot
+
+    def _term_title_changed(self, name, new_value):
+        self.init_term_title()
 
     def init_term_title(self):
         # Enable or disable the terminal title.
@@ -367,52 +359,11 @@ class TerminalInteractiveShell(InteractiveShell):
         if os.name == 'posix':
             aliases = [('clear', 'clear'), ('more', 'more'), ('less', 'less'),
                        ('man', 'man')]
-        elif os.name == 'nt':
-            aliases = [('cls', 'cls')]
-
+        else :
+            aliases = []
 
         for name, cmd in aliases:
             self.alias_manager.soft_define_alias(name, cmd)
-
-    #-------------------------------------------------------------------------
-    # Things related to the banner and usage
-    #-------------------------------------------------------------------------
-
-    def _banner1_changed(self):
-        self.compute_banner()
-
-    def _banner2_changed(self):
-        self.compute_banner()
-
-    def _term_title_changed(self, name, new_value):
-        self.init_term_title()
-
-    def init_banner(self, banner1, banner2, display_banner):
-        if banner1 is not None:
-            self.banner1 = banner1
-        if banner2 is not None:
-            self.banner2 = banner2
-        if display_banner is not None:
-            self.display_banner = display_banner
-        self.compute_banner()
-
-    def show_banner(self, banner=None):
-        if banner is None:
-            banner = self.banner
-        self.write(banner)
-
-    def compute_banner(self):
-        self.banner = self.banner1
-        if self.profile and self.profile != 'default':
-            self.banner += '\nIPython profile: %s\n' % self.profile
-        if self.banner2:
-            self.banner += '\n' + self.banner2
-
-    def init_usage(self, usage=None):
-        if usage is None:
-            self.usage = interactive_usage
-        else:
-            self.usage = usage
 
     #-------------------------------------------------------------------------
     # Mainloop and code execution logic
@@ -518,7 +469,7 @@ class TerminalInteractiveShell(InteractiveShell):
                 #double-guard against keyboardinterrupts during kbdint handling
                 try:
                     self.write('\nKeyboardInterrupt\n')
-                    source_raw = self.input_splitter.source_raw_reset()[1]
+                    source_raw = self.input_splitter.raw_reset()
                     hlen_b4_cell = \
                         self._replace_rlhist_multiline(source_raw, hlen_b4_cell)
                     more = False
@@ -541,13 +492,18 @@ class TerminalInteractiveShell(InteractiveShell):
                 # asynchronously by signal handlers, for example.
                 self.showtraceback()
             else:
-                self.input_splitter.push(line)
-                more = self.input_splitter.push_accepts_more()
+                try:
+                    self.input_splitter.push(line)
+                    more = self.input_splitter.push_accepts_more()
+                except SyntaxError:
+                    # Run the code directly - run_cell takes care of displaying
+                    # the exception.
+                    more = False
                 if (self.SyntaxTB.last_syntax_error and
                     self.autoedit_syntax):
                     self.edit_syntax_error()
                 if not more:
-                    source_raw = self.input_splitter.source_raw_reset()[1]
+                    source_raw = self.input_splitter.raw_reset()
                     self.run_cell(source_raw, store_history=True)
                     hlen_b4_cell = \
                         self._replace_rlhist_multiline(source_raw, hlen_b4_cell)
@@ -561,19 +517,12 @@ class TerminalInteractiveShell(InteractiveShell):
         The returned line does not include the trailing newline.
         When the user enters the EOF key sequence, EOFError is raised.
 
-        Optional inputs:
+        Parameters
+        ----------
 
-          - prompt(''): a string to be printed to prompt the user.
-
-          - continue_prompt(False): whether this line is the first one or a
-          continuation in a sequence of inputs.
+        prompt : str, optional
+          A string to be printed to prompt the user.
         """
-        # Code run by the user may have modified the readline completer state.
-        # We must ensure that our completer is back in place.
-
-        if self.has_readline:
-            self.set_readline_completer()
-        
         # raw_input expects str, but we pass it unicode sometimes
         prompt = py3compat.cast_bytes_py2(prompt)
 

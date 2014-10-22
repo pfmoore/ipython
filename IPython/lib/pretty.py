@@ -125,49 +125,6 @@ __all__ = ['pretty', 'pprint', 'PrettyPrinter', 'RepresentationPrinter',
 
 _re_pattern_type = type(re.compile(''))
 
-def _failed_repr(obj, e):
-    """Render a failed repr, including the exception.
-    
-    Tries to get exception and type info
-    """
-    # get exception name
-    if e.__class__.__module__ in ('exceptions', 'builtins'):
-        ename = e.__class__.__name__
-    else:
-        ename = '{}.{}'.format(
-            e.__class__.__module__,
-            e.__class__.__name__,
-        )
-    # and exception string, which sometimes fails
-    # (usually due to unicode error message)
-    try:
-        estr = str(e)
-    except Exception:
-        estr = "unknown"
-    
-    # and class name
-    try:
-        klass = _safe_getattr(obj, '__class__', None) or type(obj)
-        mod = _safe_getattr(klass, '__module__', None)
-        if mod in (None, '__builtin__', 'builtins', 'exceptions'):
-            classname = klass.__name__
-        else:
-            classname = mod + '.' + klass.__name__
-    except Exception:
-        # this may be paranoid, but we already know repr is broken
-        classname = "unknown type"
-    
-    # the informative repr
-    return "<repr(<{} at 0x{:x}>) failed: {}: {}>".format(
-        classname, id(obj), ename, estr,
-    )
-
-def _safe_repr(obj):
-    """Don't assume repr is not broken."""
-    try:
-        return repr(obj)
-    except Exception as e:
-        return _failed_repr(obj, e)
 
 def _safe_getattr(obj, attr, default=None):
     """Safe version of getattr.
@@ -229,10 +186,11 @@ class PrettyPrinter(_PrettyPrinterBase):
     callback method.
     """
 
-    def __init__(self, output, max_width=79, newline='\n'):
+    def __init__(self, output, max_width=79, newline='\n', max_seq_length=1000):
         self.output = output
         self.max_width = max_width
         self.newline = newline
+        self.max_seq_length = max_seq_length
         self.output_width = 0
         self.buffer_width = 0
         self.buffer = deque()
@@ -325,7 +283,17 @@ class PrettyPrinter(_PrettyPrinterBase):
         self.group_stack.append(group)
         self.group_queue.enq(group)
         self.indentation += indent
-
+    
+    def _enumerate(self, seq):
+        """like enumerate, but with an upper limit on the number of items"""
+        for idx, x in enumerate(seq):
+            if self.max_seq_length and idx >= self.max_seq_length:
+                self.text(',')
+                self.breakable()
+                self.text('...')
+                raise StopIteration
+            yield idx, x
+    
     def end_group(self, dedent=0, close=''):
         """End a group. See `begin_group` for more details."""
         self.indentation -= dedent
@@ -549,11 +517,7 @@ def _default_pprint(obj, p, cycle):
     klass = _safe_getattr(obj, '__class__', None) or type(obj)
     if _safe_getattr(klass, '__repr__', None) not in _baseclass_reprs:
         # A user-provided repr. Find newlines and replace them with p.break_()
-        output = _safe_repr(obj)
-        for idx,output_line in enumerate(output.splitlines()):
-            if idx:
-                p.break_()
-            p.text(output_line)
+        _repr_pprint(obj, p, cycle)
         return
     p.begin_group(1, '<')
     p.pretty(klass)
@@ -598,7 +562,7 @@ def _seq_pprinter_factory(start, end, basetype):
             return p.text(start + '...' + end)
         step = len(start)
         p.begin_group(step, start)
-        for idx, x in enumerate(obj):
+        for idx, x in p._enumerate(obj):
             if idx:
                 p.text(',')
                 p.breakable()
@@ -635,7 +599,7 @@ def _set_pprinter_factory(start, end, basetype):
             except Exception:
                 # Sometimes the items don't sort.
                 pass
-            for idx, x in enumerate(items):
+            for idx, x in p._enumerate(items):
                 if idx:
                     p.text(',')
                     p.breakable()
@@ -664,7 +628,7 @@ def _dict_pprinter_factory(start, end, basetype=None):
         except Exception as e:
             # Sometimes the keys don't sort.
             pass
-        for idx, key in enumerate(keys):
+        for idx, key in p._enumerate(keys):
             if idx:
                 p.text(',')
                 p.breakable()
@@ -678,7 +642,7 @@ def _dict_pprinter_factory(start, end, basetype=None):
 def _super_pprint(obj, p, cycle):
     """The pprint for the super type."""
     p.begin_group(8, '<super: ')
-    p.pretty(obj.__self_class__)
+    p.pretty(obj.__thisclass__)
     p.text(',')
     p.breakable()
     p.pretty(obj.__self__)
@@ -712,42 +676,47 @@ def _re_pattern_pprint(obj, p, cycle):
 
 def _type_pprint(obj, p, cycle):
     """The pprint for classes and types."""
-    mod = _safe_getattr(obj, '__module__', None)
-    if mod is None:
-        # Heap allocated types might not have the module attribute,
-        # and others may set it to None.
-        return p.text(obj.__name__)
+    # Heap allocated types might not have the module attribute,
+    # and others may set it to None.
 
-    if mod in ('__builtin__', 'builtins', 'exceptions'):
-        name = obj.__name__
+    # Checks for a __repr__ override in the metaclass
+    if type(obj).__repr__ is not type.__repr__:
+        _repr_pprint(obj, p, cycle)
+        return
+
+    mod = _safe_getattr(obj, '__module__', None)
+    name = _safe_getattr(obj, '__qualname__', obj.__name__)
+
+    if mod in (None, '__builtin__', 'builtins', 'exceptions'):
+        p.text(name)
     else:
-        name = mod + '.' + obj.__name__
-    p.text(name)
+        p.text(mod + '.' + name)
 
 
 def _repr_pprint(obj, p, cycle):
     """A pprint that just redirects to the normal repr function."""
-    p.text(_safe_repr(obj))
+    # Find newlines and replace them with p.break_()
+    output = repr(obj)
+    for idx,output_line in enumerate(output.splitlines()):
+        if idx:
+            p.break_()
+        p.text(output_line)
 
 
 def _function_pprint(obj, p, cycle):
     """Base pprint for all functions and builtin functions."""
-    if obj.__module__ in ('__builtin__', 'builtins', 'exceptions') or not obj.__module__:
-        name = obj.__name__
-    else:
-        name = obj.__module__ + '.' + obj.__name__
+    name = _safe_getattr(obj, '__qualname__', obj.__name__)
+    mod = obj.__module__
+    if mod and mod not in ('__builtin__', 'builtins', 'exceptions'):
+        name = mod + '.' + name
     p.text('<function %s>' % name)
 
 
 def _exception_pprint(obj, p, cycle):
     """Base pprint for all exceptions."""
-    if obj.__class__.__module__ in ('exceptions', 'builtins'):
-        name = obj.__class__.__name__
-    else:
-        name = '%s.%s' % (
-            obj.__class__.__module__,
-            obj.__class__.__name__
-        )
+    name = getattr(obj.__class__, '__qualname__', obj.__class__.__name__)
+    if obj.__class__.__module__ not in ('exceptions', 'builtins'):
+        name = '%s.%s' % (obj.__class__.__module__, name)
     step = len(name) + 1
     p.begin_group(step, name + '(')
     for idx, arg in enumerate(getattr(obj, 'args', ())):

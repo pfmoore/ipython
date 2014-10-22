@@ -30,10 +30,8 @@ import logging
 import os
 import sys
 
-from IPython.config.loader import (
-    Config, PyFileConfigLoader, ConfigFileNotFound
-)
-from IPython.config.application import boolean_flag, catch_config_error
+from IPython.config.loader import Config
+from IPython.config.application import boolean_flag, catch_config_error, Application
 from IPython.core import release
 from IPython.core import usage
 from IPython.core.completer import IPCompleter
@@ -173,8 +171,7 @@ frontend_flags['quick']=(
 
 frontend_flags['i'] = (
     {'TerminalIPythonApp' : {'force_interact' : True}},
-    """If running code from the command line, become interactive afterwards.
-    Note: can also be given simply as '-i.'"""
+    """If running code from the command line, become interactive afterwards."""
 )
 flags.update(frontend_flags)
 
@@ -224,7 +221,7 @@ class TerminalIPythonApp(BaseIPythonApplication, InteractiveShellApp):
             StoreMagics,
         ]
 
-    subcommands = Dict(dict(
+    subcommands = dict(
         qtconsole=('IPython.qt.console.qtconsoleapp.IPythonQtConsoleApp',
             """Launch the IPython Qt Console."""
         ),
@@ -249,7 +246,17 @@ class TerminalIPythonApp(BaseIPythonApplication, InteractiveShellApp):
         nbconvert=('IPython.nbconvert.nbconvertapp.NbConvertApp',
             "Convert notebooks to/from other formats."
         ),
-    ))
+        trust=('IPython.nbformat.sign.TrustNotebookApp',
+            "Sign notebooks to trust their potentially unsafe contents at load."
+        ),
+        kernelspec=('IPython.kernel.kernelspecapp.KernelSpecApp',
+            "Manage IPython kernel specifications."
+        ),
+    )
+    subcommands['install-nbextension'] = (
+        "IPython.html.nbextensions.NBExtensionApp",
+        "Install IPython notebook extension files"
+    )
 
     # *do* autocreate requested profile, but don't create the config file.
     auto_create=Bool(True)
@@ -273,7 +280,8 @@ class TerminalIPythonApp(BaseIPythonApplication, InteractiveShellApp):
     # unless the --i flag (App.force_interact) is true.
     force_interact = Bool(False, config=True,
         help="""If a command or file is given via the command-line,
-        e.g. 'ipython foo.py"""
+        e.g. 'ipython foo.py', start an interactive shell after executing the
+        file or command."""
     )
     def _force_interact_changed(self, name, old, new):
         if new:
@@ -364,7 +372,6 @@ class TerminalIPythonApp(BaseIPythonApplication, InteractiveShellApp):
         else:
             self.log.debug("IPython not interactive...")
 
-
 def load_default_config(ipython_dir=None):
     """Load the default config file from the default ipython_dir.
 
@@ -372,15 +379,14 @@ def load_default_config(ipython_dir=None):
     """
     if ipython_dir is None:
         ipython_dir = get_ipython_dir()
-    profile_dir = os.path.join(ipython_dir, 'profile_default')
-    cl = PyFileConfigLoader("ipython_config.py", profile_dir)
-    try:
-        config = cl.load_config()
-    except ConfigFileNotFound:
-        # no config found
-        config = Config()
-    return config
 
+    profile_dir = os.path.join(ipython_dir, 'profile_default')
+
+    config = Config()
+    for cf in Application._load_config_files("ipython_config", path=profile_dir):
+        config.update(cf)
+
+    return config
 
 launch_new_instance = TerminalIPythonApp.launch_instance
 

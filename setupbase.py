@@ -8,29 +8,25 @@ This includes:
     * Functions for finding things like packages, package data, etc.
     * A function for checking dependencies.
 """
+
+# Copyright (c) IPython Development Team.
+# Distributed under the terms of the Modified BSD License.
+
 from __future__ import print_function
 
-#-------------------------------------------------------------------------------
-#  Copyright (C) 2008  The IPython Development Team
-#
-#  Distributed under the terms of the BSD License.  The full license is in
-#  the file COPYING, distributed as part of this software.
-#-------------------------------------------------------------------------------
-
-#-------------------------------------------------------------------------------
-# Imports
-#-------------------------------------------------------------------------------
 import errno
 import os
 import sys
 
+from distutils import log
 from distutils.command.build_py import build_py
 from distutils.command.build_scripts import build_scripts
 from distutils.command.install import install
 from distutils.command.install_scripts import install_scripts
 from distutils.cmd import Command
+from fnmatch import fnmatch
 from glob import glob
-from subprocess import call
+from subprocess import check_call
 
 from setupext import install_data_ext
 
@@ -127,42 +123,110 @@ def find_package_data():
     # This is not enough for these things to appear in an sdist.
     # We need to muck with the MANIFEST to get this to work
     
-    # exclude static things that we don't ship (e.g. mathjax)
-    excludes = ['mathjax']
-    
-    # add 'static/' prefix to exclusions, and tuplify for use in startswith
-    excludes = tuple([os.path.join('static', ex) for ex in excludes])
+    # exclude components and less from the walk;
+    # we will build the components separately
+    excludes = [
+        pjoin('static', 'components'),
+        pjoin('static', '*', 'less'),
+    ]
     
     # walk notebook resources:
     cwd = os.getcwd()
     os.chdir(os.path.join('IPython', 'html'))
-    static_walk = list(os.walk('static'))
     static_data = []
-    for parent, dirs, files in static_walk:
-        if parent.startswith(excludes):
+    for parent, dirs, files in os.walk('static'):
+        if any(fnmatch(parent, pat) for pat in excludes):
+            # prevent descending into subdirs
+            dirs[:] = []
             continue
         for f in files:
-            static_data.append(os.path.join(parent, f))
-
+            static_data.append(pjoin(parent, f))
+    
+    components = pjoin("static", "components")
+    # select the components we actually need to install
+    # (there are lots of resources we bundle for sdist-reasons that we don't actually use)
+    static_data.extend([
+        pjoin(components, "backbone", "backbone-min.js"),
+        pjoin(components, "bootstrap", "js", "bootstrap.min.js"),
+        pjoin(components, "bootstrap-tour", "build", "css", "bootstrap-tour.min.css"),
+        pjoin(components, "bootstrap-tour", "build", "js", "bootstrap-tour.min.js"),
+        pjoin(components, "font-awesome", "fonts", "*.*"),
+        pjoin(components, "google-caja", "html-css-sanitizer-minified.js"),
+        pjoin(components, "highlight.js", "build", "highlight.pack.js"),
+        pjoin(components, "jquery", "jquery.min.js"),
+        pjoin(components, "jquery-ui", "ui", "minified", "jquery-ui.min.js"),
+        pjoin(components, "jquery-ui", "themes", "smoothness", "jquery-ui.min.css"),
+        pjoin(components, "jquery-ui", "themes", "smoothness", "images", "*"),
+        pjoin(components, "marked", "lib", "marked.js"),
+        pjoin(components, "requirejs", "require.js"),
+        pjoin(components, "underscore", "underscore-min.js"),
+        pjoin(components, "moment", "moment.js"),
+        pjoin(components, "moment", "min", "moment.min.js"),
+        pjoin(components, "text-encoding", "lib", "encoding.js"),
+    ])
+    
+    # Ship all of Codemirror's CSS and JS
+    for parent, dirs, files in os.walk(pjoin(components, 'codemirror')):
+        for f in files:
+            if f.endswith(('.js', '.css')):
+                static_data.append(pjoin(parent, f))
+    
     os.chdir(os.path.join('tests',))
-    js_tests = glob('casperjs/*.*') +  glob('casperjs/*/*')
+    js_tests = glob('*.js') + glob('*/*.js')
+
+    os.chdir(os.path.join(cwd, 'IPython', 'nbconvert'))
+    nbconvert_templates = [os.path.join(dirpath, '*.*')
+                            for dirpath, _, _ in os.walk('templates')]
+
     os.chdir(cwd)
 
     package_data = {
         'IPython.config.profile' : ['README*', '*/*.py'],
         'IPython.core.tests' : ['*.png', '*.jpg'],
-        'IPython.testing' : ['*.txt'],
+        'IPython.lib.tests' : ['*.wav'],
         'IPython.testing.plugin' : ['*.txt'],
         'IPython.html' : ['templates/*'] + static_data,
         'IPython.html.tests' : js_tests,
         'IPython.qt.console' : ['resources/icon/*.svg'],
-        'IPython.nbconvert' : ['templates/*.tpl', 'templates/latex/*.tplx',
-            'templates/latex/skeleton/*.tplx', 'templates/skeleton/*', 
-            'templates/reveal_internals/*.tpl', 'tests/files/*.*',
-            'exporters/tests/files/*.*'],
-        'IPython.nbformat' : ['tests/*.ipynb']
+        'IPython.nbconvert' : nbconvert_templates +
+            [
+                'tests/files/*.*',
+                'exporters/tests/files/*.*',
+                'preprocessors/tests/files/*.*',
+            ],
+        'IPython.nbconvert.filters' : ['marked.js'],
+        'IPython.nbformat' : [
+            'tests/*.ipynb',
+            'v3/nbformat.v3.schema.json',
+            ]
     }
+    
     return package_data
+
+
+def check_package_data(package_data):
+    """verify that package_data globs make sense"""
+    print("checking package data")
+    for pkg, data in package_data.items():
+        pkg_root = pjoin(*pkg.split('.'))
+        for d in data:
+            path = pjoin(pkg_root, d)
+            if '*' in path:
+                assert len(glob(path)) > 0, "No files match pattern %s" % path
+            else:
+                assert os.path.exists(path), "Missing package data: %s" % path
+
+
+def check_package_data_first(command):
+    """decorator for checking package_data before running a given command
+    
+    Probably only needs to wrap build_py
+    """
+    class DecoratedCommand(command):
+        def run(self):
+            check_package_data(self.package_data)
+            command.run(self)
+    return DecoratedCommand
 
 
 #---------------------------------------------------------------------------
@@ -210,10 +274,9 @@ def find_data_files():
     """
     Find IPython's data_files.
 
-    Most of these are docs.
+    Just man pages at this point.
     """
 
-    docdirbase  = pjoin('share', 'doc', 'ipython')
     manpagebase = pjoin('share', 'man', 'man1')
 
     # Simple file lists can be made by hand
@@ -222,24 +285,8 @@ def find_data_files():
         # When running from a source tree, the manpages aren't gzipped
         manpages = [f for f in glob(pjoin('docs','man','*.1')) if isfile(f)]
 
-    igridhelpfiles = [f for f in glob(pjoin('IPython','extensions','igrid_help.*')) if isfile(f)]
-
-    # For nested structures, use the utility above
-    example_files = make_dir_struct(
-        'data',
-        pjoin('docs','examples'),
-        pjoin(docdirbase,'examples')
-    )
-    manual_files = make_dir_struct(
-        'data',
-        pjoin('docs','html'),
-        pjoin(docdirbase,'manual')
-    )
-
     # And assemble the entire output list
-    data_files = [ (manpagebase, manpages),
-                   (pjoin(docdirbase, 'extensions'), igridhelpfiles),
-                   ] + manual_files + example_files
+    data_files = [ (manpagebase, manpages) ]
 
     return data_files
 
@@ -325,18 +372,17 @@ def find_entry_points():
             'ipython%s = IPython:start_ipython',
             'ipcontroller%s = IPython.parallel.apps.ipcontrollerapp:launch_new_instance',
             'ipengine%s = IPython.parallel.apps.ipengineapp:launch_new_instance',
-            'iplogger%s = IPython.parallel.apps.iploggerapp:launch_new_instance',
             'ipcluster%s = IPython.parallel.apps.ipclusterapp:launch_new_instance',
             'iptest%s = IPython.testing.iptestcontroller:main',
-            'irunner%s = IPython.lib.irunner:main',
         ]
     suffix = str(sys.version_info[0])
     return [e % '' for e in ep] + [e % suffix for e in ep]
 
 script_src = """#!{executable}
 # This script was automatically generated by setup.py
-from {mod} import {func}
-{func}()
+if __name__ == '__main__':
+    from {mod} import {func}
+    {func}()
 """
 
 class build_scripts_entrypt(build_scripts):
@@ -376,20 +422,29 @@ class install_lib_symlink(Command):
             raise Exception("This doesn't work on Windows.")
         pkg = os.path.join(os.getcwd(), 'IPython')
         dest = os.path.join(self.install_dir, 'IPython')
+        if os.path.islink(dest):
+            print('removing existing symlink at %s' % dest)
+            os.unlink(dest)
         print('symlinking %s -> %s' % (pkg, dest))
-        try:
-            os.symlink(pkg, dest)
-        except OSError as e:
-            if e.errno == errno.EEXIST:
-                print('ALREADY EXISTS')
-            else:
-                raise
+        os.symlink(pkg, dest)
+
+class unsymlink(install):
+    def run(self):
+        dest = os.path.join(self.install_lib, 'IPython')
+        if os.path.islink(dest):
+            print('removing symlink at %s' % dest)
+            os.unlink(dest)
+        else:
+            print('No symlink exists at %s' % dest)
 
 class install_symlinked(install):
     def run(self):
         if sys.platform == 'win32':
             raise Exception("This doesn't work on Windows.")
-        install.run(self)
+
+        # Run all sub-commands (at least those that need to be run)
+        for cmd_name in self.get_sub_commands():
+            self.run_command(cmd_name)
     
     # 'sub_commands': a list of commands this command might have to run to
     # get its work done.  See cmd.py for more info.
@@ -439,7 +494,8 @@ def check_for_dependencies():
     check_for_sphinx()
     check_for_pygments()
     check_for_nose()
-    check_for_pexpect()
+    if os.name == 'posix':
+        check_for_pexpect()
     check_for_pyzmq()
     check_for_tornado()
     check_for_readline()
@@ -527,7 +583,7 @@ def git_prebuild(pkg_dir, build_cmd=build_py):
             with open(out_pth, 'w') as out_file:
                 out_file.writelines([
                     '# GENERATED BY setup.py\n',
-                    'commit = "%s"\n' % repo_commit,
+                    'commit = u"%s"\n' % repo_commit,
                 ])
     return require_submodules(MyBuildPy)
 
@@ -543,6 +599,69 @@ def require_submodules(command):
     return DecoratedCommand
 
 #---------------------------------------------------------------------------
+# bdist related
+#---------------------------------------------------------------------------
+
+def get_bdist_wheel():
+    """Construct bdist_wheel command for building wheels
+    
+    Constructs py2-none-any tag, instead of py2.7-none-any
+    """
+    class RequiresWheel(Command):
+        description = "Dummy command for missing bdist_wheel"
+        user_options = []
+
+        def initialize_options(self):
+            pass
+
+        def finalize_options(self):
+            pass
+
+        def run(self):
+            print("bdist_wheel requires the wheel package")
+            sys.exit(1)
+
+    if 'setuptools' not in sys.modules:
+        return RequiresWheel
+    else:
+        try:
+            from wheel.bdist_wheel import bdist_wheel, read_pkg_info, write_pkg_info
+        except ImportError:
+            return RequiresWheel
+        
+        class bdist_wheel_tag(bdist_wheel):
+
+            def add_requirements(self, metadata_path):
+                """transform platform-dependent requirements"""
+                pkg_info = read_pkg_info(metadata_path)
+                # pkg_info is an email.Message object (?!)
+                # we have to remove the unconditional 'readline' and/or 'pyreadline' entries
+                # and transform them to conditionals
+                requires = pkg_info.get_all('Requires-Dist')
+                del pkg_info['Requires-Dist']
+                def _remove_startswith(lis, prefix):
+                    """like list.remove, but with startswith instead of =="""
+                    found = False
+                    for idx, item in enumerate(lis):
+                        if item.startswith(prefix):
+                            found = True
+                            break
+                    if found:
+                        lis.pop(idx)
+                
+                for pkg in ("gnureadline", "pyreadline", "mock"):
+                    _remove_startswith(requires, pkg)
+                requires.append("gnureadline; sys.platform == 'darwin' and platform.python_implementation == 'CPython'")
+                requires.append("pyreadline (>=2.0); extra == 'terminal' and sys.platform == 'win32' and platform.python_implementation == 'CPython'")
+                requires.append("pyreadline (>=2.0); extra == 'all' and sys.platform == 'win32' and platform.python_implementation == 'CPython'")
+                requires.append("mock; extra == 'test' and python_version < '3.3'")
+                for r in requires:
+                    pkg_info['Requires-Dist'] = r
+                write_pkg_info(metadata_path, pkg_info)
+        
+        return bdist_wheel_tag
+
+#---------------------------------------------------------------------------
 # Notebook related
 #---------------------------------------------------------------------------
 
@@ -551,19 +670,30 @@ class CompileCSS(Command):
     
     Regenerate the compiled CSS from LESS sources.
     
-    Requires various dev dependencies, such as fabric and lessc.
+    Requires various dev dependencies, such as invoke and lessc.
     """
     description = "Recompile Notebook CSS"
-    user_options = []
+    user_options = [
+        ('minify', 'x', "minify CSS"),
+        ('force', 'f', "force recompilation of CSS"),
+    ]
     
     def initialize_options(self):
-        pass
+        self.minify = False
+        self.force = False
     
     def finalize_options(self):
-        pass
+        self.minify = bool(self.minify)
+        self.force = bool(self.force)
     
     def run(self):
-        call("fab css", shell=True, cwd=pjoin(repo_root, "IPython", "html"))
+        cmd = ['invoke', 'css']
+        if self.minify:
+            cmd.append('--minify')
+        if self.force:
+            cmd.append('--force')
+        check_call(cmd, cwd=pjoin(repo_root, "IPython", "html"))
+
 
 class JavascriptVersion(Command):
     """write the javascript version to notebook javascript"""
@@ -585,4 +715,21 @@ class JavascriptVersion(Command):
                 if line.startswith("IPython.version"):
                     line = 'IPython.version = "{0}";\n'.format(version)
                 f.write(line)
-            
+
+
+def css_js_prerelease(command, strict=True):
+    """decorator for building js/minified css prior to a release"""
+    class DecoratedCommand(command):
+        def run(self):
+            self.distribution.run_command('jsversion')
+            css = self.distribution.get_command_obj('css')
+            css.minify = True
+            try:
+                self.distribution.run_command('css')
+            except Exception as e:
+                if strict:
+                    raise
+                else:
+                    log.warn("Failed to build css sourcemaps: %s" % e)
+            command.run(self)
+    return DecoratedCommand

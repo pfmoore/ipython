@@ -1,22 +1,12 @@
-"""
-Module containing single call export functions.
-"""
-#-----------------------------------------------------------------------------
-# Copyright (c) 2013, the IPython Development Team.
-#
-# Distributed under the terms of the Modified BSD License.
-#
-# The full license is in the file COPYING.txt, distributed with this software.
-#-----------------------------------------------------------------------------
+"""Module containing single call export functions."""
 
-#-----------------------------------------------------------------------------
-# Imports
-#-----------------------------------------------------------------------------
+# Copyright (c) IPython Development Team.
+# Distributed under the terms of the Modified BSD License.
 
 from functools import wraps
 
 from IPython.nbformat.v3.nbbase import NotebookNode
-from IPython.config import Config
+from IPython.utils.decorators import undoc
 from IPython.utils.py3compat import string_types
 
 from .exporter import Exporter
@@ -24,26 +14,30 @@ from .templateexporter import TemplateExporter
 from .html import HTMLExporter
 from .slides import SlidesExporter
 from .latex import LatexExporter
+from .pdf import PDFExporter
 from .markdown import MarkdownExporter
 from .python import PythonExporter
 from .rst import RSTExporter
+from .notebook import NotebookExporter
 
 #-----------------------------------------------------------------------------
 # Classes
 #-----------------------------------------------------------------------------
 
+@undoc
 def DocDecorator(f):
     
     #Set docstring of function
     f.__doc__ = f.__doc__ + """
-    nb : Notebook node
+    nb : :class:`~{nbnode_mod}.NotebookNode`
+      The notebook to export.
     config : config (optional, keyword arg)
         User configuration instance.
     resources : dict (optional, keyword arg)
         Resources used in the conversion process.
         
     Returns
-    ----------
+    -------
     tuple- output, resources, exporter_instance
     output : str
         Jinja 2 output.  This is the resulting converted notebook.
@@ -55,8 +49,10 @@ def DocDecorator(f):
         to caller because it provides a 'file_extension' property which
         specifies what extension the output should be saved as.
 
+    Notes
+    -----
     WARNING: API WILL CHANGE IN FUTURE RELEASES OF NBCONVERT
-    """
+    """.format(nbnode_mod=NotebookNode.__module__)
             
     @wraps(f)
     def decorator(*args, **kwargs):
@@ -75,6 +71,7 @@ __all__ = [
     'export_custom',
     'export_slides',
     'export_latex',
+    'export_pdf',
     'export_markdown',
     'export_python',
     'export_rst',
@@ -92,11 +89,13 @@ def export(exporter, nb, **kw):
     """
     Export a notebook object using specific exporter class.
     
-    exporter : Exporter class type or instance
-        Class type or instance of the exporter that should be used.  If the 
-        method initializes it's own instance of the class, it is ASSUMED that 
-        the class type provided exposes a constructor (__init__) with the same 
-        signature as the base Exporter class.
+    Parameters
+    ----------
+    exporter : class:`~IPython.nbconvert.exporters.exporter.Exporter` class or instance
+      Class type or instance of the exporter that should be used.  If the
+      method initializes it's own instance of the class, it is ASSUMED that
+      the class type provided exposes a constructor (``__init__``) with the same
+      signature as the base Exporter class.
     """
     
     #Check arguments
@@ -128,9 +127,11 @@ exporter_map = dict(
     html=HTMLExporter,
     slides=SlidesExporter,
     latex=LatexExporter,
+    pdf=PDFExporter,
     markdown=MarkdownExporter,
     python=PythonExporter,
     rst=RSTExporter,
+    notebook=NotebookExporter,
 )
 
 def _make_exporter(name, E):
@@ -152,6 +153,8 @@ def export_by_name(format_name, nb, **kw):
     (Inspect) is used to find the template's corresponding explicit export
     method defined in this module.  That method is then called directly.
     
+    Parameters
+    ----------
     format_name : str
         Name of the template style to export to.
     """

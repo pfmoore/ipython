@@ -1,30 +1,24 @@
-//----------------------------------------------------------------------------
-//  Copyright (C) 2011  The IPython Development Team
-//
-//  Distributed under the terms of the BSD License.  The full license is in
-//  the file COPYING, distributed as part of this software.
-//----------------------------------------------------------------------------
+// Copyright (c) IPython Development Team.
+// Distributed under the terms of the Modified BSD License.
 
-//============================================================================
-// NotebookList
-//============================================================================
-
-var IPython = (function (IPython) {
+define([
+    'base/js/namespace',
+    'jquery',
+    'base/js/utils',
+], function(IPython, $, utils) {
     "use strict";
-    
-    var utils = IPython.utils;
 
-    var ClusterList = function (selector) {
+    var ClusterList = function (selector, options) {
         this.selector = selector;
         if (this.selector !== undefined) {
             this.element = $(selector);
             this.style();
             this.bind_events();
         }
-    };
-
-    ClusterList.prototype.baseProjectUrl = function(){
-        return this._baseProjectUrl || $('body').data('baseProjectUrl');
+        options = options || {};
+        this.options = options;
+        this.base_url = options.base_url || utils.get_body_data("baseUrl");
+        this.notebook_path = options.notebook_path || utils.get_body_data("notebookPath");
     };
 
     ClusterList.prototype.style = function () {
@@ -49,9 +43,10 @@ var IPython = (function (IPython) {
             cache : false,
             type : "GET",
             dataType : "json",
-            success : $.proxy(this.load_list_success, this)
+            success : $.proxy(this.load_list_success, this),
+            error : utils.log_ajax_error,
         };
-        var url = utils.url_path_join(this.baseProjectUrl(), 'clusters');
+        var url = utils.url_join_encode(this.base_url, 'clusters');
         $.ajax(url, settings);
     };
 
@@ -65,7 +60,7 @@ var IPython = (function (IPython) {
         var len = data.length;
         for (var i=0; i<len; i++) {
             var element = $('<div/>');
-            var item = new ClusterItem(element);
+            var item = new ClusterItem(element, this.options);
             item.update_state(data[i]);
             element.data('item', item);
             this.element.append(element);
@@ -73,19 +68,16 @@ var IPython = (function (IPython) {
     };
 
 
-    var ClusterItem = function (element) {
+    var ClusterItem = function (element, options) {
         this.element = $(element);
+        this.base_url = options.base_url || utils.get_body_data("baseUrl");
+        this.notebook_path = options.notebook_path || utils.get_body_data("notebookPath");
         this.data = null;
         this.style();
     };
 
-    ClusterItem.prototype.baseProjectUrl = function(){
-        return this._baseProjectUrl || $('body').data('baseProjectUrl');
-    };
-
-
     ClusterItem.prototype.style = function () {
-        this.element.addClass('list_item').addClass("row-fluid");
+        this.element.addClass('list_item').addClass("row");
     };
 
     ClusterItem.prototype.update_state = function (data) {
@@ -100,16 +92,16 @@ var IPython = (function (IPython) {
 
     ClusterItem.prototype.state_stopped = function () {
         var that = this;
-        var profile_col = $('<span/>').addClass('profile_col span4').text(this.data.profile);
-        var status_col = $('<span/>').addClass('status_col span3').html('stopped');
-        var engines_col = $('<span/>').addClass('engine_col span3');
+        var profile_col = $('<div/>').addClass('profile_col col-xs-4').text(this.data.profile);
+        var status_col = $('<div/>').addClass('status_col col-xs-3').text('stopped');
+        var engines_col = $('<div/>').addClass('engine_col col-xs-3');
         var input = $('<input/>').attr('type','number')
                 .attr('min',1)
                 .attr('size',3)
-                .addClass('engine_num_input');
+                .addClass('engine_num_input form-control');
         engines_col.append(input);
-        var start_button = $('<button/>').addClass("btn btn-mini").text("Start");
-        var action_col = $('<span/>').addClass('action_col span2').append(
+        var start_button = $('<button/>').addClass("btn btn-default btn-xs").text("Start");
+        var action_col = $('<div/>').addClass('action_col col-xs-2').append(
             $("<span/>").addClass("item_buttons btn-group").append(
                 start_button
             )
@@ -122,7 +114,7 @@ var IPython = (function (IPython) {
         start_button.click(function (e) {
             var n = that.element.find('.engine_num_input').val();
             if (!/^\d+$/.test(n) && n.length>0) {
-                status_col.html('invalid engine #');
+                status_col.text('invalid engine #');
             } else {
                 var settings = {
                     cache : false,
@@ -132,13 +124,14 @@ var IPython = (function (IPython) {
                     success : function (data, status, xhr) {
                         that.update_state(data);
                     },
-                    error : function (data, status, xhr) {
-                        status_col.html("error starting cluster");
+                    error : function (xhr, status, error) {
+                        status_col.text("error starting cluster");
+                        utils.log_ajax_error(xhr, status, error);
                     }
                 };
-                status_col.html('starting');
-                var url = utils.url_path_join(
-                    that.baseProjectUrl(),
+                status_col.text('starting');
+                var url = utils.url_join_encode(
+                    that.base_url,
                     'clusters',
                     that.data.profile,
                     'start'
@@ -151,11 +144,11 @@ var IPython = (function (IPython) {
 
     ClusterItem.prototype.state_running = function () {
         var that = this;
-        var profile_col = $('<span/>').addClass('profile_col span4').text(this.data.profile);
-        var status_col = $('<span/>').addClass('status_col span3').html('running');
-        var engines_col = $('<span/>').addClass('engines_col span3').html(this.data.n);
-        var stop_button = $('<button/>').addClass("btn btn-mini").text("Stop");
-        var action_col = $('<span/>').addClass('action_col span2').append(
+        var profile_col = $('<div/>').addClass('profile_col col-xs-4').text(this.data.profile);
+        var status_col = $('<div/>').addClass('status_col col-xs-3').text('running');
+        var engines_col = $('<div/>').addClass('engines_col col-xs-3').text(this.data.n);
+        var stop_button = $('<button/>').addClass("btn btn-default btn-xs").text("Stop");
+        var action_col = $('<div/>').addClass('action_col col-xs-2').append(
             $("<span/>").addClass("item_buttons btn-group").append(
                 stop_button
             )
@@ -173,14 +166,14 @@ var IPython = (function (IPython) {
                 success : function (data, status, xhr) {
                     that.update_state(data);
                 },
-                error : function (data, status, xhr) {
-                    console.log('error',data);
-                    status_col.html("error stopping cluster");
+                error : function (xhr, status, error) {
+                    utils.log_ajax_error(xhr, status, error),
+                    status_col.text("error stopping cluster");
                 }
             };
-            status_col.html('stopping');
-            var url = utils.url_path_join(
-                that.baseProjectUrl(),
+            status_col.text('stopping');
+            var url = utils.url_join_encode(
+                that.base_url,
                 'clusters',
                 that.data.profile,
                 'stop'
@@ -189,11 +182,12 @@ var IPython = (function (IPython) {
         });
     };
 
-
+    // For backwards compatability.
     IPython.ClusterList = ClusterList;
     IPython.ClusterItem = ClusterItem;
 
-    return IPython;
-
-}(IPython));
-
+    return {
+        'ClusterList': ClusterList,
+        'ClusterItem': ClusterItem,
+    };
+});

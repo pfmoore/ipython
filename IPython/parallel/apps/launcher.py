@@ -1,23 +1,8 @@
 # encoding: utf-8
-"""
-Facilities for launching IPython processes asynchronously.
+"""Facilities for launching IPython processes asynchronously."""
 
-Authors:
-
-* Brian Granger
-* MinRK
-"""
-
-#-----------------------------------------------------------------------------
-#  Copyright (C) 2008-2011  The IPython Development Team
-#
-#  Distributed under the terms of the BSD License.  The full license is in
-#  the file COPYING, distributed as part of this software.
-#-----------------------------------------------------------------------------
-
-#-----------------------------------------------------------------------------
-# Imports
-#-----------------------------------------------------------------------------
+# Copyright (c) IPython Development Team.
+# Distributed under the terms of the Modified BSD License.
 
 import copy
 import logging
@@ -62,7 +47,7 @@ from IPython.utils.traitlets import (
     Any, Integer, CFloat, List, Unicode, Dict, Instance, HasTraits, CRegExp
 )
 from IPython.utils.encoding import DEFAULT_ENCODING
-from IPython.utils.path import get_home_dir
+from IPython.utils.path import get_home_dir, ensure_dir_exists
 from IPython.utils.process import find_cmd, FindCmdError
 from IPython.utils.py3compat import iteritems, itervalues
 
@@ -76,13 +61,17 @@ WINDOWS = os.name == 'nt'
 # Paths to the kernel apps
 #-----------------------------------------------------------------------------
 
-cmd = "from IPython.parallel.apps.%s import launch_new_instance; launch_new_instance()"
+ipcluster_cmd_argv = [sys.executable, "-m", "IPython.parallel.cluster"]
 
-ipcluster_cmd_argv = [sys.executable, "-c", cmd % "ipclusterapp"]
+ipengine_cmd_argv = [sys.executable, "-m", "IPython.parallel.engine"]
 
-ipengine_cmd_argv = [sys.executable, "-c", cmd % "ipengineapp"]
+ipcontroller_cmd_argv = [sys.executable, "-m", "IPython.parallel.controller"]
 
-ipcontroller_cmd_argv = [sys.executable, "-c", cmd % "ipcontrollerapp"]
+if WINDOWS and sys.version_info < (3,):
+    # `python -m package` doesn't work on Windows Python 2,
+    # but `python -m module` does.
+    ipengine_cmd_argv = [sys.executable, "-m", "IPython.parallel.apps.ipengineapp"]
+    ipcontroller_cmd_argv = [sys.executable, "-m", "IPython.parallel.apps.ipcontrollerapp"]
 
 #-----------------------------------------------------------------------------
 # Base launchers and errors
@@ -305,8 +294,7 @@ class LocalProcessLauncher(BaseLauncher):
         except Exception:
             self.log.debug("interrupt failed")
             pass
-        self.killer  = ioloop.DelayedCallback(lambda : self.signal(SIGKILL), delay*1000, self.loop)
-        self.killer.start()
+        self.killer  = self.loop.add_timeout(self.loop.time() + delay, lambda : self.signal(SIGKILL))
 
     # callbacks, etc:
 
@@ -589,15 +577,20 @@ class SSHLauncher(LocalProcessLauncher):
     
     def _send_file(self, local, remote):
         """send a single file"""
-        remote = "%s:%s" % (self.location, remote)
+        full_remote = "%s:%s" % (self.location, remote)
         for i in range(10):
             if not os.path.exists(local):
                 self.log.debug("waiting for %s" % local)
                 time.sleep(1)
             else:
                 break
-        self.log.info("sending %s to %s", local, remote)
-        check_output(self.scp_cmd + [local, remote])
+        remote_dir = os.path.dirname(remote)
+        self.log.info("ensuring remote %s:%s/ exists", self.location, remote_dir)
+        check_output(self.ssh_cmd + self.ssh_args + \
+            [self.location, 'mkdir', '-p', '--', remote_dir]
+        )
+        self.log.info("sending %s to %s", local, full_remote)
+        check_output(self.scp_cmd + [local, full_remote])
     
     def send_files(self):
         """send our files (called before start)"""
@@ -619,6 +612,8 @@ class SSHLauncher(LocalProcessLauncher):
                 time.sleep(1)
             elif check == u'yes':
                 break
+        local_dir = os.path.dirname(local)
+        ensure_dir_exists(local_dir, 775)
         check_output(self.scp_cmd + [full_remote, local])
     
     def fetch_files(self):
@@ -1308,9 +1303,10 @@ class HTCondorLauncher(BatchSystemLauncher):
     this - the mechanism of shebanged scripts means that the python binary will be 
     launched with argv[0] set to the *location of the ip{cluster, engine, controller} 
     scripts on the remote node*. This means you need to take care that:
-      a. Your remote nodes have their paths configured correctly, with the ipengine and ipcontroller
-         of the python environment you wish to execute code in having top precedence.
-      b. This functionality is untested on Windows.
+
+    a. Your remote nodes have their paths configured correctly, with the ipengine and ipcontroller
+       of the python environment you wish to execute code in having top precedence.
+    b. This functionality is untested on Windows.
 
     If you need different behavior, consider making you own template.
     """

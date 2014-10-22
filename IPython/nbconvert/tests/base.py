@@ -13,13 +13,16 @@ Contains base test class for nbconvert
 # Imports
 #-----------------------------------------------------------------------------
 
+import io
 import os
 import glob
 import shutil
 import unittest
 
 import IPython
+from IPython.nbformat import current
 from IPython.utils.tempdir import TemporaryWorkingDirectory
+from IPython.utils.path import get_ipython_package_dir
 from IPython.utils.process import get_output_error_code
 from IPython.testing.tools import get_ipython_cmd
 
@@ -88,8 +91,8 @@ class TestsBase(unittest.TestCase):
            Replace "ii" with "i" in the string "Hiiii" yields "Hii"
            Another replacement cds "Hi" (the desired output)
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         text : string
             Text to replace in.
         search : string
@@ -106,10 +109,16 @@ class TestsBase(unittest.TestCase):
 
         #Copy the files if requested.
         if copy_filenames is not None:
-            self.copy_files_to(copy_filenames)
+            self.copy_files_to(copy_filenames, dest=temp_dir.name)
 
         #Return directory handler
         return temp_dir
+    
+    def create_empty_notebook(self, path):
+        nb = current.new_notebook()
+        nb.worksheets.append(current.new_worksheet())
+        with io.open(path, 'w', encoding='utf-8') as f:
+            current.write(nb, f, 'json')
 
 
     def copy_files_to(self, copy_filenames, dest='.'):
@@ -130,7 +139,7 @@ class TestsBase(unittest.TestCase):
         
         #Build a path using the IPython directory and the relative path we just
         #found.
-        path = IPython.__path__[0]
+        path = get_ipython_package_dir()
         for name in names:
             path = os.path.join(path, name)
         return path
@@ -141,8 +150,8 @@ class TestsBase(unittest.TestCase):
         Execute a, IPython shell command, listening for both Errors and non-zero
         return codes.
 
-        PARAMETERS:
-        -----------
+        Parameters
+        ----------
         parameters : str
             List of parameters to pass to IPython.
         ignore_return_code : optional bool (default False)

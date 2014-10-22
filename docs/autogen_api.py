@@ -17,45 +17,49 @@ if __name__ == '__main__':
     docwriter = ApiDocWriter(package,rst_extension='.rst')
     # You have to escape the . here because . is a special char for regexps.
     # You must do make clean if you change this!
-    docwriter.package_skip_patterns += [r'\.fixes$',
-                                        r'\.external$',
+    docwriter.package_skip_patterns += [r'\.external$',
+                                        # Extensions are documented elsewhere.
                                         r'\.extensions',
-                                        r'\.kernel\.config',
-                                        r'\.attic',
-                                        r'\.quarantine',
-                                        r'\.deathrow',
-                                        r'\.config\.default',
                                         r'\.config\.profile',
-                                        r'\.frontend',
-                                        r'\.gui',
-                                        r'\.kernel',
-                                        # For now, the zmq code has
-                                        # unconditional top-level code so it's
-                                        # not import safe.  This needs fixing
-                                        r'\.zmq',
+                                        # These should be accessed via nbformat.current
+                                        r'\.nbformat\.v\d+',
+                                        # Public API for this is in kernel.zmq.eventloops
+                                        r'\.kernel\.zmq\.gui',
+                                        # Magics are documented separately
+                                        r'\.core\.magics',
                                         ]
 
-    docwriter.module_skip_patterns += [
-                                        r'\.testing\.iptest',
-                                        # Keeping these disabled is OK
-                                        r'\.parallel\.controller\.mongodb',
-                                        r'\.lib\.inputhookwx',
-                                        r'\.lib\.inputhookgtk',
-                                        r'\.cocoa',
+    # The inputhook* modules often cause problems on import, such as trying to
+    # load incompatible Qt bindings. It's easiest to leave them all out. The
+    # main API is in the inputhook module, which is documented.
+    docwriter.module_skip_patterns += [ r'\.lib\.inputhook.+',
                                         r'\.ipdoctest',
-                                        r'\.Gnuplot',
-                                        r'\.frontend\.process\.winprocess',
-                                        r'\.frontend',
-                                        r'\.Shell',
+                                        r'\.testing\.plugin',
+                                        # This just prints a deprecation msg:
+                                        r'\.frontend$',
+                                        # Deprecated:
+                                        r'\.core\.magics\.deprecated',
+                                        # We document this manually.
+                                        r'\.utils\.py3compat',
+                                        # These are exposed by nbformat.current
+                                        r'\.nbformat\.convert',
+                                        r'\.nbformat\.validator',
+                                        # These are exposed in display
+                                        r'\.core\.display',
+                                        r'\.lib\.display',
+                                        # This isn't actually a module
+                                        r'\.html\.tasks',
                                         ]
+
+    # These modules import functions and classes from other places to expose
+    # them as part of the public API. They must have __all__ defined. The
+    # non-API modules they import from should be excluded by the skip patterns
+    # above.
+    docwriter.names_from__all__.update({
+        'IPython.nbformat.current',
+        'IPython.display',
+    })
     
-    # If we don't have pexpect, we can't load irunner, so skip any code that
-    # depends on it
-    try:
-        import pexpect
-    except ImportError:
-        docwriter.module_skip_patterns += [r'\.lib\.irunner',
-                                           r'\.testing\.mkdoctests']
     # Now, generate the outputs
     docwriter.write_api_docs(outdir)
     # Write index with .txt extension - we can include it, but Sphinx won't try

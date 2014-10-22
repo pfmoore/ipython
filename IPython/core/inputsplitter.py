@@ -1,76 +1,26 @@
-"""Analysis of text input into executable blocks.
+"""Input handling and transformation machinery.
 
-The main class in this module, :class:`InputSplitter`, is designed to break
-input from either interactive, line-by-line environments or block-based ones,
-into standalone blocks that can be executed by Python as 'single' statements
-(thus triggering sys.displayhook).
+The first class in this module, :class:`InputSplitter`, is designed to tell when
+input from a line-oriented frontend is complete and should be executed, and when
+the user should be prompted for another line of code instead. The name 'input
+splitter' is largely for historical reasons.
 
 A companion, :class:`IPythonInputSplitter`, provides the same functionality but
 with full support for the extended IPython syntax (magics, system calls, etc).
+The code to actually do these transformations is in :mod:`IPython.core.inputtransformer`.
+:class:`IPythonInputSplitter` feeds the raw code to the transformers in order
+and stores the results.
 
-For more details, see the class docstring below.
-
-Syntax Transformations
-----------------------
-
-One of the main jobs of the code in this file is to apply all syntax
-transformations that make up 'the IPython language', i.e. magics, shell
-escapes, etc.  All transformations should be implemented as *fully stateless*
-entities, that simply take one line as their input and return a line.
-Internally for implementation purposes they may be a normal function or a
-callable object, but the only input they receive will be a single line and they
-should only return a line, without holding any data-dependent state between
-calls.
-
-As an example, the EscapedTransformer is a class so we can more clearly group
-together the functionality of dispatching to individual functions based on the
-starting escape character, but the only method for public use is its call
-method.
-
-
-ToDo
-----
-
-- Should we make push() actually raise an exception once push_accepts_more()
-  returns False?
-
-- Naming cleanups.  The tr_* names aren't the most elegant, though now they are
-  at least just attributes of a class so not really very exposed.
-
-- Think about the best way to support dynamic things: automagic, autocall,
-  macros, etc.
-
-- Think of a better heuristic for the application of the transforms in
-  IPythonInputSplitter.push() than looking at the buffer ending in ':'.  Idea:
-  track indentation change events (indent, dedent, nothing) and apply them only
-  if the indentation went up, but not otherwise.
-
-- Think of the cleanest way for supporting user-specified transformations (the
-  user prefilters we had before).
-
-Authors
--------
-
-* Fernando Perez
-* Brian Granger
+For more details, see the class docstrings below.
 """
-#-----------------------------------------------------------------------------
-#  Copyright (C) 2010  The IPython Development Team
-#
-#  Distributed under the terms of the BSD License.  The full license is in
-#  the file COPYING, distributed as part of this software.
-#-----------------------------------------------------------------------------
 
-#-----------------------------------------------------------------------------
-# Imports
-#-----------------------------------------------------------------------------
-# stdlib
+# Copyright (c) IPython Development Team.
+# Distributed under the terms of the Modified BSD License.
 import ast
 import codeop
 import re
 import sys
 
-# IPython modules
 from IPython.utils.py3compat import cast_unicode
 from IPython.core.inputtransformer import (leading_indent,
                                            classic_prompt,
@@ -212,13 +162,13 @@ def get_input_encoding():
 #-----------------------------------------------------------------------------
 
 class InputSplitter(object):
-    """An object that can accumulate lines of Python source before execution.
+    r"""An object that can accumulate lines of Python source before execution.
 
     This object is designed to be fed python source line-by-line, using
-       :meth:`push`. It will return on each push whether the currently pushed
-       code could be executed already. In addition, it provides a method called
-       :meth:`push_accepts_more` that can be used to query whether more input
-       can be pushed into a single interactive block.
+    :meth:`push`. It will return on each push whether the currently pushed
+    code could be executed already. In addition, it provides a method called
+    :meth:`push_accepts_more` that can be used to query whether more input
+    can be pushed into a single interactive block.
 
     This is a simple example of how an interactive terminal-based client can use
     this tool::
@@ -258,6 +208,8 @@ class InputSplitter(object):
     _full_dedent = False
     # Boolean indicating whether the current block is complete
     _is_complete = None
+    # Boolean indicating whether the current block has an unrecoverable syntax error
+    _is_invalid = False
 
     def __init__(self):
         """Create a new InputSplitter instance.
@@ -273,6 +225,7 @@ class InputSplitter(object):
         self.source = ''
         self.code = None
         self._is_complete = False
+        self._is_invalid = False
         self._full_dedent = False
 
     def source_reset(self):
@@ -281,6 +234,42 @@ class InputSplitter(object):
         out = self.source
         self.reset()
         return out
+
+    def check_complete(self, source):
+        """Return whether a block of code is ready to execute, or should be continued
+        
+        This is a non-stateful API, and will reset the state of this InputSplitter.
+        
+        Parameters
+        ----------
+        source : string
+          Python input code, which can be multiline.
+        
+        Returns
+        -------
+        status : str
+          One of 'complete', 'incomplete', or 'invalid' if source is not a
+          prefix of valid code.
+        indent_spaces : int or None
+          The number of spaces by which to indent the next line of code. If
+          status is not 'incomplete', this is None.
+        """
+        self.reset()
+        try:
+            self.push(source)
+        except SyntaxError:
+            # Transformers in IPythonInputSplitter can raise SyntaxError,
+            # which push() will not catch.
+            return 'invalid', None
+        else:
+            if self._is_invalid:
+                return 'invalid', None
+            elif self.push_accepts_more():
+                return 'incomplete', self.indent_spaces
+            else:
+                return 'complete', None
+        finally:
+            self.reset()
 
     def push(self, lines):
         """Push one or more lines of input.
@@ -311,6 +300,7 @@ class InputSplitter(object):
         # exception is raised in compilation, we don't mislead by having
         # inconsistent code/source attributes.
         self.code, self._is_complete = None, None
+        self._is_invalid = False
 
         # Honor termination lines properly
         if source.endswith('\\\n'):
@@ -327,6 +317,7 @@ class InputSplitter(object):
         except (SyntaxError, OverflowError, ValueError, TypeError,
                 MemoryError):
             self._is_complete = True
+            self._is_invalid = True
         else:
             # Compilation didn't produce any exceptions (though it may not have
             # given a complete code object)
@@ -535,36 +526,59 @@ class IPythonInputSplitter(InputSplitter):
         self.source_raw = ''
         self.transformer_accumulating = False
         self.within_python_line = False
+
         for t in self.transforms:
-            t.reset()
+            try:
+                t.reset()
+            except SyntaxError:
+                # Nothing that calls reset() expects to handle transformer
+                # errors
+                pass
     
     def flush_transformers(self):
-        def _flush(transform, out):
-            if out is not None:
-                tmp = transform.push(out)
-                return tmp or transform.reset() or None
-            else:
-                return transform.reset() or None
+        def _flush(transform, outs):
+            """yield transformed lines
+            
+            always strings, never None
+            
+            transform: the current transform
+            outs: an iterable of previously transformed inputs.
+                 Each may be multiline, which will be passed
+                 one line at a time to transform.
+            """
+            for out in outs:
+                for line in out.splitlines():
+                    # push one line at a time
+                    tmp = transform.push(line)
+                    if tmp is not None:
+                        yield tmp
+            
+            # reset the transform
+            tmp = transform.reset()
+            if tmp is not None:
+                yield tmp
         
-        out = None
+        out = []
         for t in self.transforms_in_use:
             out = _flush(t, out)
         
-        if out is not None:
-            self._store(out)
+        out = list(out)
+        if out:
+            self._store('\n'.join(out))
 
-    def source_raw_reset(self):
-        """Return input and raw source and perform a full reset.
+    def raw_reset(self):
+        """Return raw input only and perform a full reset.
         """
-        self.flush_transformers()
-        out = self.source
-        out_r = self.source_raw
+        out = self.source_raw
         self.reset()
-        return out, out_r
+        return out
     
     def source_reset(self):
-        self.flush_transformers()
-        return super(IPythonInputSplitter, self).source_reset()
+        try:
+            self.flush_transformers()
+            return self.source
+        finally:
+            self.reset()
 
     def push_accepts_more(self):
         if self.transformer_accumulating:
@@ -576,8 +590,12 @@ class IPythonInputSplitter(InputSplitter):
         """Process and translate a cell of input.
         """
         self.reset()
-        self.push(cell)
-        return self.source_reset()
+        try:
+            self.push(cell)
+            self.flush_transformers()
+            return self.source
+        finally:
+            self.reset()
 
     def push(self, lines):
         """Push one or more lines of IPython input.
@@ -598,9 +616,9 @@ class IPythonInputSplitter(InputSplitter):
         -------
         is_complete : boolean
           True if the current input source (the result of the current input
-        plus prior inputs) forms a complete Python execution block.  Note that
-        this value is also stored as a private attribute (_is_complete), so it
-        can be queried at any time.
+          plus prior inputs) forms a complete Python execution block.  Note that
+          this value is also stored as a private attribute (_is_complete), so it
+          can be queried at any time.
         """
 
         # We must ensure all input is pure unicode

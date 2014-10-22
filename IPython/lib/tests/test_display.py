@@ -14,13 +14,14 @@
 #-----------------------------------------------------------------------------
 from __future__ import print_function
 from tempfile import NamedTemporaryFile, mkdtemp
-from os.path import split
+from os.path import split, join as pjoin, dirname
 
 # Third-party imports
 import nose.tools as nt
 
 # Our own imports
 from IPython.lib import display
+from IPython.testing.decorators import skipif_not_numpy
 
 #-----------------------------------------------------------------------------
 # Classes and functions
@@ -46,7 +47,7 @@ def test_existing_path_FileLink():
     tf = NamedTemporaryFile()
     fl = display.FileLink(tf.name)
     actual = fl._repr_html_()
-    expected = "<a href='files/%s' target='_blank'>%s</a><br>" % (tf.name,tf.name)
+    expected = "<a href='%s' target='_blank'>%s</a><br>" % (tf.name,tf.name)
     nt.assert_equal(actual,expected)
 
 def test_existing_path_FileLink_repr():
@@ -92,9 +93,9 @@ def test_existing_path_FileLinks():
     # the links should always have forward slashes, even on windows, so replace
     # backslashes with forward slashes here
     expected = ["%s/<br>" % td,
-                "&nbsp;&nbsp;<a href='files/%s' target='_blank'>%s</a><br>" %\
+                "&nbsp;&nbsp;<a href='%s' target='_blank'>%s</a><br>" %\
                  (tf2.name.replace("\\","/"),split(tf2.name)[1]),
-                "&nbsp;&nbsp;<a href='files/%s' target='_blank'>%s</a><br>" %\
+                "&nbsp;&nbsp;<a href='%s' target='_blank'>%s</a><br>" %\
                  (tf1.name.replace("\\","/"),split(tf1.name)[1])]
     expected.sort()
     # We compare the sorted list of links here as that's more reliable
@@ -155,3 +156,7 @@ def test_error_on_file_to_FileLinks():
     tf1 = NamedTemporaryFile(dir=td)
     nt.assert_raises(ValueError,display.FileLinks,tf1.name)
 
+@skipif_not_numpy
+def test_audio_from_file():
+    path = pjoin(dirname(__file__), 'test.wav')
+    display.Audio(filename=path)

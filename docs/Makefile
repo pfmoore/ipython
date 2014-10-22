@@ -40,7 +40,9 @@ clean_api:
 
 clean: clean_api
 	-rm -rf build/* dist/*
+	-cd $(SRCDIR)/config/options; cat generated | xargs -r rm -f
 	-rm -rf $(SRCDIR)/config/options/generated
+	-rm -f $(SRCDIR)/interactive/magics-generated.txt
 
 pdf: latex
 	cd build/latex && make all-pdf
@@ -57,14 +59,20 @@ dist: html
 	cp -al build/html .
 	@echo "Build finished.  Final docs are in html/"
 
-html: api autoconfig
-html_noapi: clean_api autoconfig
+html: api autoconfig automagic
+html_noapi: clean_api autoconfig automagic
 
 html html_noapi:
 	mkdir -p build/html build/doctrees
 	$(SPHINXBUILD) -b html $(ALLSPHINXOPTS) build/html
 	@echo
 	@echo "Build finished. The HTML pages are in build/html."
+
+automagic: source/interactive/magics-generated.txt
+
+source/interactive/magics-generated.txt: autogen_magics.py
+	python autogen_magics.py
+	@echo "Created docs for line & cell magics"
 
 autoconfig: source/config/options/generated
 
@@ -133,7 +141,10 @@ nightly: dist
 	rsync -avH --delete dist/ ipython:www/doc/nightly
 
 gh-pages: clean html
-	python gh-pages.py
+	# if VERSION is unspecified, it will be dev
+	# For releases, VERSION should be just the major version,
+	# e.g. VERSION=2 make gh-pages
+	python gh-pages.py $(VERSION)
 
 texinfo:
 	mkdir -p $(BUILDDIR)/texinfo

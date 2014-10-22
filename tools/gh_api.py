@@ -17,9 +17,9 @@ import json
 try:
     import requests_cache
 except ImportError:
-    print("no cache")
+    print("no cache", file=sys.stderr)
 else:
-    requests_cache.install_cache("gh_api")
+    requests_cache.install_cache("gh_api", expire_after=3600)
 
 # Keyring stores passwords by a 'username', but we're not storing a username and
 # password
@@ -124,7 +124,11 @@ def get_paged_request(url, headers=None, **params):
     results = []
     params.setdefault("per_page", 100)
     while True:
-        print("fetching %s with %s" % (url, params), file=sys.stderr)
+        if '?' in url:
+            params = None
+            print("fetching %s" % url, file=sys.stderr)
+        else:
+            print("fetching %s with %s" % (url, params), file=sys.stderr)
         response = requests.get(url, headers=headers, params=params)
         response.raise_for_status()
         results.extend(response.json())
@@ -142,7 +146,7 @@ def get_pulls_list(project, auth=False, **params):
         headers = make_auth_header()
     else:
         headers = None
-    pages = get_paged_request(url, headers=headers, params=params)
+    pages = get_paged_request(url, headers=headers, **params)
     return pages
 
 def get_issues_list(project, auth=False, **params):
@@ -176,6 +180,18 @@ def get_milestone_id(project, milestone, auth=False, **params):
 def is_pull_request(issue):
     """Return True if the given issue is a pull request."""
     return bool(issue.get('pull_request', {}).get('html_url', None))
+
+def get_authors(pr):
+    print("getting authors for #%i" % pr['number'], file=sys.stderr)
+    h = make_auth_header()
+    r = requests.get(pr['commits_url'], headers=h)
+    r.raise_for_status()
+    commits = r.json()
+    authors = []
+    for commit in commits:
+        author = commit['commit']['author']
+        authors.append("%s <%s>" % (author['name'], author['email']))
+    return authors
 
 # encode_multipart_formdata is from urllib3.filepost
 # The only change is to iter_fields, to enforce S3's required key ordering

@@ -2,84 +2,97 @@
 Module containing filter functions that allow code to be highlighted
 from within Jinja templates.
 """
-#-----------------------------------------------------------------------------
-# Copyright (c) 2013, the IPython Development Team.
-#
+
+# Copyright (c) IPython Development Team.
 # Distributed under the terms of the Modified BSD License.
-#
-# The full license is in the file COPYING.txt, distributed with this software.
-#-----------------------------------------------------------------------------
 
-#-----------------------------------------------------------------------------
-# Imports
-#-----------------------------------------------------------------------------
+# pygments must not be imported at the module level
+# because errors should be raised at runtime if it's actually needed,
+# not import time, when it may not be needed.
 
-from pygments import highlight as pygements_highlight
-from pygments.lexers import get_lexer_by_name
-from pygments.formatters import HtmlFormatter
-from pygments.formatters import LatexFormatter
-
-# Our own imports
-from IPython.nbconvert.utils.lexers import IPythonLexer
-
-#-----------------------------------------------------------------------------
-# Globals and constants
-#-----------------------------------------------------------------------------
+from IPython.nbconvert.utils.base import NbConvertBase
+from warnings import warn
 
 MULTILINE_OUTPUTS = ['text', 'html', 'svg', 'latex', 'javascript', 'json']
 
-#-----------------------------------------------------------------------------
-# Utility functions
-#-----------------------------------------------------------------------------
-
 __all__ = [
-    'highlight2html',
-    'highlight2latex'
+    'Highlight2HTML',
+    'Highlight2Latex'
 ]
 
+class Highlight2HTML(NbConvertBase):
+    def __init__(self, pygments_lexer=None, **kwargs):
+        self.pygments_lexer = pygments_lexer or 'ipython3'
+        super(Highlight2HTML, self).__init__(**kwargs)
 
-def highlight2html(source, language='ipython', metadata=None):
-    """
-    Return a syntax-highlighted version of the input source as html output.
+    def _default_language_changed(self, name, old, new):
+        warn('Setting default_language in config is deprecated, '
+             'please use kernelspecs instead.')
+        self.pygments_lexer = new
 
-    Parameters
-    ----------
-    source : str
-        source of the cell to highlight
-    language : str
-        language to highlight the syntax of
-    metadata : NotebookNode cell metadata
-        metadata of the cell to highlight
-    """
+    def __call__(self, source, language=None, metadata=None):
+        """
+        Return a syntax-highlighted version of the input source as html output.
 
-    return _pygment_highlight(source, HtmlFormatter(), language, metadata)
+        Parameters
+        ----------
+        source : str
+            source of the cell to highlight
+        language : str
+            language to highlight the syntax of
+        metadata : NotebookNode cell metadata
+            metadata of the cell to highlight
+        """
+        from pygments.formatters import HtmlFormatter
 
+        if not language:
+            language=self.pygments_lexer
 
-def highlight2latex(source, language='ipython', metadata=None, strip_verbatim=False):
-    """
-    Return a syntax-highlighted version of the input source as latex output.
-
-    Parameters
-    ----------
-    source : str
-        source of the cell to highlight
-    language : str
-        language to highlight the syntax of
-    metadata : NotebookNode cell metadata
-        metadata of the cell to highlight
-    strip_verbatim : bool
-        remove the Verbatim environment that pygments provides by default
-    """
-    latex = _pygment_highlight(source, LatexFormatter(), language, metadata)
-    if strip_verbatim:
-        latex = latex.replace(r'\begin{Verbatim}[commandchars=\\\{\}]' + '\n', '')
-        return latex.replace('\n\\end{Verbatim}\n', '')
-    else:
-        return latex
+        return _pygments_highlight(source if len(source) > 0 else ' ',
+                                   # needed to help post processors:
+                                   HtmlFormatter(cssclass=" highlight hl-"+language),
+                                   language, metadata)
 
 
+class Highlight2Latex(NbConvertBase):
+    def __init__(self, pygments_lexer=None, **kwargs):
+        self.pygments_lexer = pygments_lexer or 'ipython3'
+        super(Highlight2Latex, self).__init__(**kwargs)
 
-def _pygment_highlight(source, output_formatter, language='ipython', metadata=None):
+    def _default_language_changed(self, name, old, new):
+        warn('Setting default_language in config is deprecated, '
+             'please use kernelspecs instead.')
+        self.pygments_lexer = new
+
+    def __call__(self, source, language=None, metadata=None, strip_verbatim=False):
+        """
+        Return a syntax-highlighted version of the input source as latex output.
+
+        Parameters
+        ----------
+        source : str
+            source of the cell to highlight
+        language : str
+            language to highlight the syntax of
+        metadata : NotebookNode cell metadata
+            metadata of the cell to highlight
+        strip_verbatim : bool
+            remove the Verbatim environment that pygments provides by default
+        """
+        from pygments.formatters import LatexFormatter
+        if not language:
+            language=self.pygments_lexer
+
+        latex = _pygments_highlight(source, LatexFormatter(), language, metadata)
+        if strip_verbatim:
+            latex = latex.replace(r'\begin{Verbatim}[commandchars=\\\{\}]' + '\n', '')
+            return latex.replace('\n\\end{Verbatim}\n', '')
+        else:
+            return latex
+
+
+
+def _pygments_highlight(source, output_formatter, language='ipython', metadata=None):
     """
     Return a syntax-highlighted version of the input source
 
@@ -93,6 +106,10 @@ def _pygment_highlight(source, output_formatter, language='ipython', metadata=No
     metadata : NotebookNode cell metadata
         metadata of the cell to highlight
     """
+    from pygments import highlight
+    from pygments.lexers import get_lexer_by_name
+    from pygments.util import ClassNotFound
+    from IPython.nbconvert.utils.lexers import IPythonLexer, IPython3Lexer
 
     # If the cell uses a magic extension language,
     # use the magic language instead.
@@ -102,9 +119,17 @@ def _pygment_highlight(source, output_formatter, language='ipython', metadata=No
 
         language = metadata['magics_language']
 
-    if language == 'ipython':
+    if language == 'ipython2':
         lexer = IPythonLexer()
+    elif language == 'ipython3':
+        lexer = IPython3Lexer()
     else:
-        lexer = get_lexer_by_name(language, stripall=True)
+        try:
+            lexer = get_lexer_by_name(language, stripall=True)
+        except ClassNotFound:
+            warn("No lexer found for language %r. Treating as plain text." % language)
+            from pygments.lexers.special import TextLexer
+            lexer = TextLexer()
 
-    return pygements_highlight(source, lexer, output_formatter)
+
+    return highlight(source, lexer, output_formatter)

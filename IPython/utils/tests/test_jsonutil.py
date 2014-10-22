@@ -1,31 +1,23 @@
-"""Test suite for our JSON utilities.
-"""
-#-----------------------------------------------------------------------------
-#  Copyright (C) 2010-2011  The IPython Development Team
-#
-#  Distributed under the terms of the BSD License.  The full license is in
-#  the file COPYING.txt, distributed as part of this software.
-#-----------------------------------------------------------------------------
+# coding: utf-8
+"""Test suite for our JSON utilities."""
 
-#-----------------------------------------------------------------------------
-# Imports
-#-----------------------------------------------------------------------------
-# stdlib
+# Copyright (c) IPython Development Team.
+# Distributed under the terms of the Modified BSD License.
+
 import datetime
 import json
 from base64 import decodestring
 
-# third party
 import nose.tools as nt
 
-# our own
 from IPython.utils import jsonutil, tz
 from ..jsonutil import json_clean, encode_images
 from ..py3compat import unicode_to_str, str_to_bytes, iteritems
 
-#-----------------------------------------------------------------------------
-# Test functions
-#-----------------------------------------------------------------------------
+
+class Int(int):
+    def __str__(self):
+        return 'Int(%i)' % self
 
 def test():
     # list of input/expected output.  Use None for the expected output if it
@@ -48,6 +40,7 @@ def test():
              # More exotic objects
              ((x for x in range(3)), [0, 1, 2]),
              (iter([1, 2]), [1, 2]),
+             (Int(5), 5),
              ]
     
     for val, jval in pairs:
@@ -60,15 +53,24 @@ def test():
         json.loads(json.dumps(out))
 
 
+def test_rekey():
+    # This could fail due to modifying the dict keys in-place on Python 3
+    d = { i:i for i in map(str, range(128)) }
+    d = jsonutil.rekey(d)
+    for key in d:
+        nt.assert_is_instance(key, int)
+
 
 def test_encode_images():
     # invalid data, but the header and footer are from real files
     pngdata = b'\x89PNG\r\n\x1a\nblahblahnotactuallyvalidIEND\xaeB`\x82'
     jpegdata = b'\xff\xd8\xff\xe0\x00\x10JFIFblahblahjpeg(\xa0\x0f\xff\xd9'
+    pdfdata = b'%PDF-1.\ntrailer<</Root<</Pages<</Kids[<</MediaBox[0 0 3 3]>>]>>>>>>'
     
     fmt = {
         'image/png'  : pngdata,
         'image/jpeg' : jpegdata,
+        'application/pdf' : pdfdata
     }
     encoded = encode_images(fmt)
     for key, value in iteritems(fmt):
@@ -90,8 +92,8 @@ def test_encode_images():
 
 def test_lambda():
     jc = json_clean(lambda : 1)
-    assert isinstance(jc, str)
-    assert '<lambda>' in jc
+    nt.assert_is_instance(jc, str)
+    nt.assert_in('<lambda>', jc)
     json.dumps(jc)
 
 def test_extract_dates():
@@ -114,16 +116,18 @@ def test_extract_dates():
         nt.assert_equal(dt, ref)
 
 def test_parse_ms_precision():
-    base = '2013-07-03T16:34:52.'
+    base = '2013-07-03T16:34:52'
     digits = '1234567890'
     
+    parsed = jsonutil.parse_date(base)
+    nt.assert_is_instance(parsed, datetime.datetime)
     for i in range(len(digits)):
-        ts = base + digits[:i]
+        ts = base + '.' + digits[:i]
         parsed = jsonutil.parse_date(ts)
         if i >= 1 and i <= 6:
-            assert isinstance(parsed, datetime.datetime)
+            nt.assert_is_instance(parsed, datetime.datetime)
         else:
-            assert isinstance(parsed, str)
+            nt.assert_is_instance(parsed, str)
 
 def test_date_default():
     data = dict(today=datetime.datetime.now(), utcnow=tz.utcnow())
@@ -132,7 +136,7 @@ def test_date_default():
     nt.assert_equal(jsondata.count("+00"), 1)
     extracted = jsonutil.extract_dates(json.loads(jsondata))
     for dt in extracted.values():
-        nt.assert_true(isinstance(dt, datetime.datetime))
+        nt.assert_is_instance(dt, datetime.datetime)
 
 def test_exception():
     bad_dicts = [{1:'number', '1':'string'},
@@ -140,4 +144,8 @@ def test_exception():
                  ]
     for d in bad_dicts:
         nt.assert_raises(ValueError, json_clean, d)
-    
+
+def test_unicode_dict():
+    data = {u'üniço∂e': u'üniço∂e'}
+    clean = jsonutil.json_clean(data)
+    nt.assert_equal(data, clean)

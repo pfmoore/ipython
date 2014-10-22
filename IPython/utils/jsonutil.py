@@ -1,16 +1,8 @@
-"""Utilities to manipulate JSON objects.
-"""
-#-----------------------------------------------------------------------------
-#  Copyright (C) 2010-2011  The IPython Development Team
-#
-#  Distributed under the terms of the BSD License.  The full license is in
-#  the file COPYING.txt, distributed as part of this software.
-#-----------------------------------------------------------------------------
+"""Utilities to manipulate JSON objects."""
 
-#-----------------------------------------------------------------------------
-# Imports
-#-----------------------------------------------------------------------------
-# stdlib
+# Copyright (c) IPython Development Team.
+# Distributed under the terms of the Modified BSD License.
+
 import math
 import re
 import types
@@ -34,7 +26,11 @@ next_attr_name = '__next__' if py3compat.PY3 else 'next'
 
 # timestamp formats
 ISO8601 = "%Y-%m-%dT%H:%M:%S.%f"
-ISO8601_PAT=re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{1,6})Z?([\+\-]\d{2}:?\d{2})?$")
+ISO8601_PAT=re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(\.\d{1,6})?Z?([\+\-]\d{2}:?\d{2})?$")
+
+# holy crap, strptime is not threadsafe.
+# Calling it once at import seems to help.
+datetime.strptime("1", "%d")
 
 #-----------------------------------------------------------------------------
 # Classes and functions
@@ -43,22 +39,18 @@ ISO8601_PAT=re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{1,6})Z?([\+\-
 def rekey(dikt):
     """Rekey a dict that has been forced to use str keys where there should be
     ints by json."""
-    for k in dikt:
+    for k in list(dikt):
         if isinstance(k, string_types):
-            ik=fk=None
+            nk = None
             try:
-                ik = int(k)
+                nk = int(k)
             except ValueError:
                 try:
-                    fk = float(k)
+                    nk = float(k)
                 except ValueError:
                     continue
-            if ik is not None:
-                nk = ik
-            else:
-                nk = fk
             if nk in dikt:
-                raise KeyError("already have key %r"%nk)
+                raise KeyError("already have key %r" % nk)
             dikt[nk] = dikt.pop(k)
     return dikt
 
@@ -75,7 +67,10 @@ def parse_date(s):
     if m:
         # FIXME: add actual timezone support
         # this just drops the timezone info
-        notz = m.groups()[0]
+        notz, ms, tz = m.groups()
+        if not ms:
+            ms = '.0'
+        notz = notz + ms
         return datetime.strptime(notz, ISO8601)
     return s
 
@@ -119,6 +114,8 @@ PNG64 = b'iVBORw0KG'
 JPEG = b'\xff\xd8'
 # front of JPEG base64-encoded
 JPEG64 = b'/9'
+# front of PDF base64-encoded
+PDF64 = b'JVBER'
 
 def encode_images(format_dict):
     """b64-encodes images in a displaypub format dict
@@ -136,7 +133,7 @@ def encode_images(format_dict):
 
     format_dict : dict
         A copy of the same dictionary,
-        but binary image data ('image/png' or 'image/jpeg')
+        but binary image data ('image/png', 'image/jpeg' or 'application/pdf')
         is base64-encoded.
 
     """
@@ -155,6 +152,13 @@ def encode_images(format_dict):
         if not jpegdata.startswith(JPEG64):
             jpegdata = encodebytes(jpegdata)
         encoded['image/jpeg'] = jpegdata.decode('ascii')
+
+    pdfdata = format_dict.get('application/pdf')
+    if isinstance(pdfdata, bytes):
+        # make sure we don't double-encode
+        if not pdfdata.startswith(PDF64):
+            pdfdata = encodebytes(pdfdata)
+        encoded['application/pdf'] = pdfdata.decode('ascii')
 
     return encoded
 
@@ -181,22 +185,9 @@ def json_clean(obj):
       encoded as JSON.  Note that this function does not *encode* its inputs,
       it simply sanitizes it so that there will be no encoding errors later.
 
-    Examples
-    --------
-    >>> json_clean(4)
-    4
-    >>> json_clean(list(range(10)))
-    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
-    >>> sorted(json_clean(dict(x=1, y=2)).items())
-    [('x', 1), ('y', 2)]
-    >>> sorted(json_clean(dict(x=1, y=2, z=[1,2,3])).items())
-    [('x', 1), ('y', 2), ('z', [1, 2, 3])]
-    >>> json_clean(True)
-    True
     """
-    # types that are 'atomic' and ok in json as-is.  bool doesn't need to be
-    # listed explicitly because bools pass as int instances
-    atomic_ok = (unicode_type, int, type(None))
+    # types that are 'atomic' and ok in json as-is.
+    atomic_ok = (unicode_type, type(None))
 
     # containers that we need to convert into lists
     container_to_list = (tuple, set, types.GeneratorType)
@@ -205,7 +196,14 @@ def json_clean(obj):
         # cast out-of-range floats to their reprs
         if math.isnan(obj) or math.isinf(obj):
             return repr(obj)
-        return obj
+        return float(obj)
+    
+    if isinstance(obj, int):
+        # cast int to int, in case subclasses override __str__ (e.g. boost enum, #4598)
+        if isinstance(obj, bool):
+            # bools are ints, but we don't want to cast them to 0,1
+            return obj
+        return int(obj)
 
     if isinstance(obj, atomic_ok):
         return obj
@@ -225,14 +223,14 @@ def json_clean(obj):
         # key collisions after stringification.  This can happen with keys like
         # True and 'true' or 1 and '1', which collide in JSON.
         nkeys = len(obj)
-        nkeys_collapsed = len(set(map(str, obj)))
+        nkeys_collapsed = len(set(map(unicode_type, obj)))
         if nkeys != nkeys_collapsed:
-            raise ValueError('dict can not be safely converted to JSON: '
+            raise ValueError('dict cannot be safely converted to JSON: '
                              'key collision would lead to dropped values')
         # If all OK, proceed by making the new dict that will be json-safe
         out = {}
         for k,v in iteritems(obj):
-            out[str(k)] = json_clean(v)
+            out[unicode_type(k)] = json_clean(v)
         return out
 
     # If we get here, we don't know how to handle the object, so we just get

@@ -3,8 +3,8 @@
     z-index: 10;
     overflow: hidden;
     border: 1px solid @border_color;
-	.corner-all;
-	.box-shadow(0px 6px 10px -1px #adadad);
+    .corner-all;
+    .box-shadow(0px 6px 10px -1px #adadad);
 }
 
 .completions select {
@@ -14,11 +14,12 @@
     padding: 0px;
     margin: 0px;
     overflow: auto;
-    font-family: @monoFontFamily;
-	font-size: 110%;
-    color: @textColor;
+    font-family: @font-family-monospace;
+    font-size: 110%;
+    color: @text-color;
+    width: auto;
 }
 
 .completions select option.context {
-  color: @blueDark;
+    color: darken(@brand-primary, 10%);
 }

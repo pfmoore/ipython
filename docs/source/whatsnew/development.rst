@@ -10,53 +10,149 @@ This document describes in-flight development work.
     conflicts for other Pull Requests). Instead, create a new file in the
     `docs/source/whatsnew/pr` folder
 
+Using different kernels
+-----------------------
 
-- `%%capture` cell magic now captures the rich display output, not just
-  stdout/stderr
+.. image:: ../_images/kernel_selector_screenshot.png
+   :alt: Screenshot of notebook kernel selection dropdown menu
+   :align: center
 
-Select Notebook Name When Renaming a Notebook
----------------------------------------------
+You can now choose a kernel for a notebook within the user interface, rather
+than starting up a separate notebook server for each kernel you want to use. The
+syntax highlighting adapts to match the language you're working in.
 
-The default notebook name is Untitled. It's unlikely you want to keep this name
-or part of it when naming your notebook. Instead, IPython will select the text
-in the input field so the user can easily type over the name and change it.
+Information about the kernel is stored in the notebook file, so when you open a
+notebook, it will automatically start the correct kernel.
 
-clear_output changes
---------------------
+It is also easier to use the Qt console and the terminal console with other
+kernels, using the --kernel flag::
 
-* There is no longer a 500ms delay when calling ``clear_output``.
-* The ability to clear stderr and stdout individually was removed.
-* A new ``wait`` flag that prevents ``clear_output`` from being executed until new
-  output is available.  This eliminates animation flickering by allowing the
-  user to double buffer the output.
-* The output div height is remembered when the ``wait=True`` flag is used.
+    ipython qtconsole --kernel bash
+    ipython console --kernel bash
+
+    # To list available kernels
+    ipython kernelspec list
+
+Kernel authors should see :ref:`kernelspecs` for how to register their kernels
+with IPython so that these mechanisms work.
+
+Typing unicode identifiers
+--------------------------
+
+.. image:: /_images/unicode_completion.png
+
+Complex expressions can be much cleaner when written with a wider choice of
+characters. Python 3 allows unicode identifiers, and IPython 3 makes it easier
+to type those, using a feature from Julia. Type a backslash followed by a LaTeX
+style short name, such as ``\alpha``. Press tab, and it will turn into α.
+
+Other new features
+------------------
+
+* :class:`~.TextWidget` and :class:`~.TextareaWidget` objects now include a
+  ``placeholder`` attribute, for displaying placeholder text before the
+  user has typed anything.
+
+* The %load magic can now find the source for objects in the user namespace.
+  To enable searching the namespace, use the ``-n`` option.
+
+  .. sourcecode:: ipython
+
+      In [1]: %load -n my_module.some_function
+
+* :class:`~.DirectView` objects have a new :meth:`~.DirectView.use_cloudpickle`
+  method, which works like ``view.use_dill()``, but causes the ``cloudpickle``
+  module from PiCloud's `cloud`__ library to be used rather than dill or the
+  builtin pickle module.
+
+  __ https://pypi.python.org/pypi/cloud
+
+* Added a .ipynb exporter to nbconvert.  It can be used by passing `--to notebook`
+  as a commandline argument to nbconvert.
+
+* New nbconvert preprocessor called :class:`~.ClearOutputPreprocessor`. This
+  clears the output from IPython notebooks.
+
+* New preprocessor for nbconvert that executes all the code cells in a notebook.
+  To run a notebook and save its output in a new notebook::
+
+      ipython nbconvert InputNotebook --ExecutePreprocessor.enabled=True --to notebook --output Executed
+
+* Consecutive stream (stdout/stderr) output is merged into a single output
+  in the notebook document.
+  Previously, all output messages were preserved as separate output fields in the JSON.
+  Now, the same merge is applied to the stored output as the displayed output,
+  improving document load time for notebooks with many small outputs.
 
 .. DO NOT EDIT THIS LINE BEFORE RELEASE. FEATURE INSERTION POINT.
+
 
 Backwards incompatible changes
 ------------------------------
 
-* Python 2.6 and 3.2 are no longer supported: the minimum required
-  Python versions are now 2.7 and 3.3.
-* The Transformer classes have been renamed to Preprocessor in nbconvert and
-  their `call` methods for them have been renamed to `preprocess`.
-* The `call` methods of nbconvert post-processsors have been renamed to
-  `postprocess`.
+* :func:`IPython.core.oinspect.getsource` call specification has changed:
 
-* The module ``IPython.core.fakemodule`` has been removed.
+  * `oname` keyword argument has been added for property source formatting
+  * `is_binary` keyword argument has been dropped, passing ``True`` had
+    previously short-circuited the function to return ``None`` unconditionally
 
-* The alias system has been reimplemented to use magic functions. There should be little
-  visible difference while automagics are enabled, as they are by default, but parts of the
-  :class:`~IPython.core.alias.AliasManager` API have been removed.
+* Removed the octavemagic extension: it is now available as ``oct2py.ipython``.
 
-* We fixed an issue with switching between matplotlib inline and GUI backends,
-  but the fix requires matplotlib 1.1 or newer.  So from now on, we consider
-  matplotlib 1.1 to be the minimally supported version for IPython. Older
-  versions for the most part will work, but we make no guarantees about it.
+* Creating PDFs with LaTeX no longer uses a post processor.
+  Use `nbconvert --to pdf` instead of `nbconvert --to latex --post pdf`.
 
-* The :command:`pycolor` command has been removed. We recommend the much more capable
-  :command:`pygmentize` command from the `Pygments <http://pygments.org/>`_ project.
-  If you need to keep the exact output of :command:`pycolor`, you can still use
-  ``python -m IPython.utils.PyColorize foo.py``.
+* Used https://github.com/jdfreder/bootstrap2to3 to migrate the Notebook to Bootstrap 3.
+
+  Additional changes:
+
+  - Set `.tab-content .row` `0px;` left and right margin (bootstrap default is `-15px;`)
+  - Removed `height: @btn_mini_height;` from `.list_header>div, .list_item>div` in `tree.less`
+  - Set `#header` div `margin-bottom: 0px;`
+  - Set `#menus` to `float: left;`
+  - Set `#maintoolbar .navbar-text` to `float: none;`
+  - Added no-padding convienence class.
+  - Set border of #maintoolbar to 0px
+
+* Accessing the `container` DOM object when displaying javascript has been
+  deprecated in IPython 2.0 in favor of accessing `element`. Starting with
+  IPython 3.0 trying to access `container` will raise an error in browser
+  javascript console.
+
+* ``IPython.utils.py3compat.open`` was removed: :func:`io.open` provides all
+  the same functionality.
+
+* The NotebookManager and ``/api/notebooks`` service has been replaced by
+  a more generic ContentsManager and ``/api/contents`` service,
+  which supports all kinds of files.
+* The Dashboard now lists all files, not just notebooks and directories.
+* The ``--script`` hook for saving notebooks to Python scripts is removed,
+  use :samp:`ipython nbconvert --to python {notebook}` instead.
+
+* The ``rmagic`` extension is deprecated, as it is now part of rpy2. See
+  :mod:`rpy2.ipython.rmagic`.
+
+* :meth:`~.KernelManager.start_kernel` and :meth:`~.KernelManager.format_kernel_cmd`
+  no longer accept a ``executable`` parameter. Use the kernelspec machinery instead.
+
+* The widget classes have been renamed from `*Widget` to `*`.  The old names are
+  still functional, but are deprecated.  i.e. `IntSliderWidget` has been renamed
+  to `IntSlider`.
+* The ContainerWidget was renamed to Box and no longer defaults as a flexible
+  box in the web browser.  A new FlexBox widget was added, which allows you to
+  use the flexible box model.
 
 .. DO NOT EDIT THIS LINE BEFORE RELEASE. INCOMPAT INSERTION POINT.
+
+IFrame embedding
+````````````````
+
+The IPython Notebook and its APIs by default will only be allowed to be
+embedded in an iframe on the same origin.
+
+To override this, set ``headers[X-Frame-Options]`` to one of
+
+* DENY
+* SAMEORIGIN
+* ALLOW-FROM uri
+
+See `Mozilla's guide to X-Frame-Options <https://developer.mozilla.org/en-US/docs/Web/HTTP/X-Frame-Options>`_ for more examples.

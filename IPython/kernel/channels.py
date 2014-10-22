@@ -1,20 +1,10 @@
-"""Base classes to manage a Client's interaction with a running kernel
-"""
+"""Base classes to manage a Client's interaction with a running kernel"""
 
-#-----------------------------------------------------------------------------
-#  Copyright (C) 2013  The IPython Development Team
-#
-#  Distributed under the terms of the BSD License.  The full license is in
-#  the file COPYING, distributed as part of this software.
-#-----------------------------------------------------------------------------
-
-#-----------------------------------------------------------------------------
-# Imports
-#-----------------------------------------------------------------------------
+# Copyright (c) IPython Development Team.
+# Distributed under the terms of the Modified BSD License.
 
 from __future__ import absolute_import
 
-# Standard library imports
 import atexit
 import errno
 from threading import Thread
@@ -26,7 +16,8 @@ import zmq
 from zmq import ZMQError
 from zmq.eventloop import ioloop, zmqstream
 
-# Local imports
+from IPython.core.release import kernel_protocol_version_info
+
 from .channelsabc import (
     ShellChannelABC, IOPubChannelABC,
     HBChannelABC, StdInChannelABC,
@@ -36,6 +27,8 @@ from IPython.utils.py3compat import string_types, iteritems
 #-----------------------------------------------------------------------------
 # Constants and exceptions
 #-----------------------------------------------------------------------------
+
+major_protocol_version = kernel_protocol_version_info[0]
 
 class InvalidPortNumber(Exception):
     pass
@@ -133,11 +126,27 @@ class ZMQSocketChannel(Thread):
     def stop(self):
         """Stop the channel's event loop and join its thread.
 
-        This calls :method:`Thread.join` and returns when the thread
+        This calls :meth:`~threading.Thread.join` and returns when the thread
         terminates. :class:`RuntimeError` will be raised if
-        :method:`self.start` is called again.
+        :meth:`~threading.Thread.start` is called again.
         """
+        if self.ioloop is not None:
+            self.ioloop.stop()
         self.join()
+        self.close()
+    
+    def close(self):
+        if self.ioloop is not None:
+            try:
+                self.ioloop.close(all_fds=True)
+            except Exception:
+                pass
+        if self.socket is not None:
+            try:
+                self.socket.close(linger=0)
+            except Exception:
+                pass
+            self.socket = None
 
     @property
     def address(self):
@@ -167,7 +176,8 @@ class ZMQSocketChannel(Thread):
         Unpacks message, and calls handlers with it.
         """
         ident,smsg = self.session.feed_identities(msg)
-        self.call_handlers(self.session.unserialize(smsg))
+        msg = self.session.deserialize(smsg)
+        self.call_handlers(msg)
 
 
 
@@ -180,33 +190,26 @@ class ShellChannel(ZMQSocketChannel):
     proxy_methods = [
         'execute',
         'complete',
-        'object_info',
+        'inspect',
         'history',
         'kernel_info',
         'shutdown',
+        'is_complete',
     ]
 
     def __init__(self, context, session, address):
         super(ShellChannel, self).__init__(context, session, address)
         self.ioloop = ioloop.IOLoop()
-
+    
     def run(self):
         """The thread's main activity.  Call start() instead."""
         self.socket = self.context.socket(zmq.DEALER)
+        self.socket.linger = 1000
         self.socket.setsockopt(zmq.IDENTITY, self.session.bsession)
         self.socket.connect(self.address)
         self.stream = zmqstream.ZMQStream(self.socket, self.ioloop)
         self.stream.on_recv(self._handle_recv)
         self._run_loop()
-        try:
-            self.socket.close()
-        except:
-            pass
-
-    def stop(self):
-        """Stop the channel's event loop and join its thread."""
-        self.ioloop.stop()
-        super(ShellChannel, self).stop()
 
     def call_handlers(self, msg):
         """This method is called in the ioloop thread when a message arrives.
@@ -219,7 +222,7 @@ class ShellChannel(ZMQSocketChannel):
         raise NotImplementedError('call_handlers must be defined in a subclass.')
 
     def execute(self, code, silent=False, store_history=True,
-                user_variables=None, user_expressions=None, allow_stdin=None):
+                user_expressions=None, allow_stdin=None):
         """Execute code in the kernel.
 
         Parameters
@@ -234,11 +237,6 @@ class ShellChannel(ZMQSocketChannel):
         store_history : bool, optional (default True)
             If set, the kernel will store command history.  This is forced
             to be False if silent is True.
-
-        user_variables : list, optional
-            A list of variable names to pull from the user's namespace.  They
-            will come back as a dict with these names as keys and their
-            :func:`repr` as values.
 
         user_expressions : dict, optional
             A dict mapping names to expressions to be evaluated in the user's
@@ -256,8 +254,6 @@ class ShellChannel(ZMQSocketChannel):
         -------
         The msg_id of the message sent.
         """
-        if user_variables is None:
-            user_variables = []
         if user_expressions is None:
             user_expressions = {}
         if allow_stdin is None:
@@ -267,13 +263,11 @@ class ShellChannel(ZMQSocketChannel):
         # Don't waste network traffic if inputs are invalid
         if not isinstance(code, string_types):
             raise ValueError('code %r must be a string' % code)
-        validate_string_list(user_variables)
         validate_string_dict(user_expressions)
 
         # Create class for content/msg creation. Related to, but possibly
         # not in Session.
         content = dict(code=code, silent=silent, store_history=store_history,
-                       user_variables=user_variables,
                        user_expressions=user_expressions,
                        allow_stdin=allow_stdin,
                        )
@@ -281,38 +275,42 @@ class ShellChannel(ZMQSocketChannel):
         self._queue_send(msg)
         return msg['header']['msg_id']
 
-    def complete(self, text, line, cursor_pos, block=None):
+    def complete(self, code, cursor_pos=None):
         """Tab complete text in the kernel's namespace.
 
         Parameters
         ----------
-        text : str
-            The text to complete.
-        line : str
-            The full line of text that is the surrounding context for the
-            text to complete.
-        cursor_pos : int
-            The position of the cursor in the line where the completion was
-            requested.
-        block : str, optional
-            The full block of code in which the completion is being requested.
+        code : str
+            The context in which completion is requested.
+            Can be anything between a variable name and an entire cell.
+        cursor_pos : int, optional
+            The position of the cursor in the block of code where the completion was requested.
+            Default: ``len(code)``
 
         Returns
         -------
         The msg_id of the message sent.
         """
-        content = dict(text=text, line=line, block=block, cursor_pos=cursor_pos)
+        if cursor_pos is None:
+            cursor_pos = len(code)
+        content = dict(code=code, cursor_pos=cursor_pos)
         msg = self.session.msg('complete_request', content)
         self._queue_send(msg)
         return msg['header']['msg_id']
 
-    def object_info(self, oname, detail_level=0):
+    def inspect(self, code, cursor_pos=None, detail_level=0):
         """Get metadata information about an object in the kernel's namespace.
+
+        It is up to the kernel to determine the appropriate object to inspect.
 
         Parameters
         ----------
-        oname : str
-            A string specifying the object name.
+        code : str
+            The context in which info is requested.
+            Can be anything between a variable name and an entire cell.
+        cursor_pos : int, optional
+            The position of the cursor in the block of code where the info was requested.
+            Default: ``len(code)``
         detail_level : int, optional
             The level of detail for the introspection (0-2)
 
@@ -320,8 +318,12 @@ class ShellChannel(ZMQSocketChannel):
         -------
         The msg_id of the message sent.
         """
-        content = dict(oname=oname, detail_level=detail_level)
-        msg = self.session.msg('object_info_request', content)
+        if cursor_pos is None:
+            cursor_pos = len(code)
+        content = dict(code=code, cursor_pos=cursor_pos,
+            detail_level=detail_level,
+        )
+        msg = self.session.msg('inspect_request', content)
         self._queue_send(msg)
         return msg['header']['msg_id']
 
@@ -368,6 +370,15 @@ class ShellChannel(ZMQSocketChannel):
         msg = self.session.msg('kernel_info_request')
         self._queue_send(msg)
         return msg['header']['msg_id']
+    
+    def _handle_kernel_info_reply(self, msg):
+        """handle kernel info reply
+        
+        sets protocol adaptation version
+        """
+        adapt_version = int(msg['content']['protocol_version'].split('.')[0])
+        if adapt_version != major_protocol_version:
+            self.session.adapt_version = adapt_version
 
     def shutdown(self, restart=False):
         """Request an immediate kernel shutdown.
@@ -386,6 +397,10 @@ class ShellChannel(ZMQSocketChannel):
         self._queue_send(msg)
         return msg['header']['msg_id']
 
+    def is_complete(self, code):
+        msg = self.session.msg('is_complete_request', {'code': code})
+        self._queue_send(msg)
+        return msg['header']['msg_id']
 
 
 class IOPubChannel(ZMQSocketChannel):
@@ -401,21 +416,13 @@ class IOPubChannel(ZMQSocketChannel):
     def run(self):
         """The thread's main activity.  Call start() instead."""
         self.socket = self.context.socket(zmq.SUB)
+        self.socket.linger = 1000
         self.socket.setsockopt(zmq.SUBSCRIBE,b'')
         self.socket.setsockopt(zmq.IDENTITY, self.session.bsession)
         self.socket.connect(self.address)
         self.stream = zmqstream.ZMQStream(self.socket, self.ioloop)
         self.stream.on_recv(self._handle_recv)
         self._run_loop()
-        try:
-            self.socket.close()
-        except:
-            pass
-
-    def stop(self):
-        """Stop the channel's event loop and join its thread."""
-        self.ioloop.stop()
-        super(IOPubChannel, self).stop()
 
     def call_handlers(self, msg):
         """This method is called in the ioloop thread when a message arrives.
@@ -430,7 +437,7 @@ class IOPubChannel(ZMQSocketChannel):
     def flush(self, timeout=1.0):
         """Immediately processes all pending messages on the iopub channel.
 
-        Callers should use this method to ensure that :method:`call_handlers`
+        Callers should use this method to ensure that :meth:`call_handlers`
         has been called for all messages that have been received on the
         0MQ SUB socket of this channel.
 
@@ -470,20 +477,12 @@ class StdInChannel(ZMQSocketChannel):
     def run(self):
         """The thread's main activity.  Call start() instead."""
         self.socket = self.context.socket(zmq.DEALER)
+        self.socket.linger = 1000
         self.socket.setsockopt(zmq.IDENTITY, self.session.bsession)
         self.socket.connect(self.address)
         self.stream = zmqstream.ZMQStream(self.socket, self.ioloop)
         self.stream.on_recv(self._handle_recv)
         self._run_loop()
-        try:
-            self.socket.close()
-        except:
-            pass
-
-    def stop(self):
-        """Stop the channel's event loop and join its thread."""
-        self.ioloop.stop()
-        super(StdInChannel, self).stop()
 
     def call_handlers(self, msg):
         """This method is called in the ioloop thread when a message arrives.
@@ -529,7 +528,7 @@ class HBChannel(ZMQSocketChannel):
             self.poller.unregister(self.socket)
             self.socket.close()
         self.socket = self.context.socket(zmq.REQ)
-        self.socket.setsockopt(zmq.LINGER, 0)
+        self.socket.linger = 1000
         self.socket.connect(self.address)
 
         self.poller.register(self.socket, zmq.POLLIN)
@@ -603,10 +602,6 @@ class HBChannel(ZMQSocketChannel):
                 # and close/reopen the socket, because the REQ/REP cycle has been broken
                 self._create_socket()
                 continue
-        try:
-            self.socket.close()
-        except:
-            pass
 
     def pause(self):
         """Pause the heartbeat."""

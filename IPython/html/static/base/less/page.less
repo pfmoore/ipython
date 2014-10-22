@@ -20,10 +20,15 @@ body {
 div#header {
     /* Initially hidden to prevent FLOUC */
     display: none;
+    margin-bottom: 0px;
+    padding-left: 30px;
+    padding-bottom: 5px;
+    border-bottom: 1px solid @navbar-default-border;
+    .border-box-sizing();
 }
 
 #ipython_notebook {
-    padding-left: 16px;
+    padding-left: 0px;
 }
 
 #noscript {
@@ -46,6 +51,7 @@ div#header {
 #site {
     width: 100%;
     display: none;
+    .border-box-sizing();
 }
 
 /* Smaller buttons */
@@ -65,19 +71,40 @@ span#login_widget {
     float: right;
 }
 
-.nav-header {
-    text-transform: none;
+span#login_widget > .button,
+#logout
+{
+    .btn();
+    .btn-default();
+    .btn-sm();
 }
 
-.navbar-nobg {
-    background-color: transparent;
-    background-image: none;
+.nav-header {
+    text-transform: none;
 }
 
 #header > span {
   margin-top: 10px;
 }
 
-.modal-body {
-  max-height: 500px;
+// class for stretching dialogs to fill the screen
+.modal_stretch .modal-dialog {
+    .vbox();
+    min-height: 80%;
+    .modal-body {
+        max-height: none;
+        flex: 1;
+    }
+}
+
+@media (min-width: 768px) {
+    .modal .modal-dialog {
+        width: 700px;
+    }
+}
+
+// less mixin to be sure to add the right class to get icons with font awesome.
+.icon(@ico){
+    .fa();
+    content: @ico;
 }

@@ -41,16 +41,29 @@ syntax = \
        [(i,py3compat.u_format(o)) for i,o in \
        [(u'a =! ls', "a = get_ipython().getoutput({u}'ls')"),
         (u'b = !ls', "b = get_ipython().getoutput({u}'ls')"),
+        (u'c= !ls', "c = get_ipython().getoutput({u}'ls')"),
+        (u'd == !ls', u'd == !ls'), # Invalid syntax, but we leave == alone.
         ('x=1', 'x=1'), # normal input is unmodified
         ('    ','    '),  # blank lines are kept intact
+        # Tuple unpacking
+        (u"a, b = !echo 'a\\nb'", u"a, b = get_ipython().getoutput({u}\"echo 'a\\\\nb'\")"),
+        (u"a,= !echo 'a'", u"a, = get_ipython().getoutput({u}\"echo 'a'\")"),
+        (u"a, *bc = !echo 'a\\nb\\nc'", u"a, *bc = get_ipython().getoutput({u}\"echo 'a\\\\nb\\\\nc'\")"),
+        # Tuple unpacking with regular Python expressions, not our syntax.
+        (u"a, b = range(2)", u"a, b = range(2)"),
+        (u"a, = range(1)", u"a, = range(1)"),
+        (u"a, *bc = range(3)", u"a, *bc = range(3)"),
         ]],
 
        assign_magic =
        [(i,py3compat.u_format(o)) for i,o in \
        [(u'a =% who', "a = get_ipython().magic({u}'who')"),
         (u'b = %who', "b = get_ipython().magic({u}'who')"),
+        (u'c= %ls', "c = get_ipython().magic({u}'ls')"),
+        (u'd == %ls', u'd == %ls'), # Invalid syntax, but we leave == alone.
         ('x=1', 'x=1'), # normal input is unmodified
         ('    ','    '),  # blank lines are kept intact
+        (u"a, b = %foo", u"a, b = get_ipython().magic({u}'foo')"),
         ]],
 
        classic_prompt =
@@ -199,12 +212,21 @@ syntax_ml = \
           ('...', ''),
           ('...     return x', '    return x'),
           ],
+         [('board = """....', 'board = """....'),
+          ('....', '....'),
+          ('...."""', '...."""'),
+          ],
         ],
 
        ipy_prompt =
        [ [('In [24]: for i in range(10):','for i in range(10):'),
           ('   ....:     print i','    print i'),
           ('   ....: ', ''),
+          ],
+         [('In [24]: for i in range(10):','for i in range(10):'),
+          # Qt console prompts expand with spaces, not dots
+          ('    ...:     print i','    print i'),
+          ('    ...: ', ''),
           ],
          [('In [2]: a="""','a="""'),
           ('   ...: 123"""','123"""'),

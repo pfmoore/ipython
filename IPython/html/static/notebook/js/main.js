@@ -1,79 +1,107 @@
-//----------------------------------------------------------------------------
-//  Copyright (C) 2011  The IPython Development Team
-//
-//  Distributed under the terms of the BSD License.  The full license is in
-//  the file COPYING, distributed as part of this software.
-//----------------------------------------------------------------------------
+// Copyright (c) IPython Development Team.
+// Distributed under the terms of the Modified BSD License.
 
-//============================================================================
-// On document ready
-//============================================================================
-"use strict";
+require([
+    'base/js/namespace',
+    'jquery',
+    'notebook/js/notebook',
+    'base/js/utils',
+    'base/js/page',
+    'notebook/js/layoutmanager',
+    'base/js/events',
+    'auth/js/loginwidget',
+    'notebook/js/maintoolbar',
+    'notebook/js/pager',
+    'notebook/js/quickhelp',
+    'notebook/js/menubar',
+    'notebook/js/notificationarea',
+    'notebook/js/savewidget',
+    'notebook/js/keyboardmanager',
+    'notebook/js/config',
+    'notebook/js/kernelselector',
+    'codemirror/lib/codemirror',
+    // only loaded, not used, please keep sure this is loaded last
+    'custom/custom'
+], function(
+    IPython, 
+    $,
+    notebook, 
+    utils, 
+    page, 
+    layoutmanager, 
+    events,
+    loginwidget, 
+    maintoolbar, 
+    pager, 
+    quickhelp, 
+    menubar, 
+    notificationarea, 
+    savewidget, 
+    keyboardmanager,
+    config,
+    kernelselector,
+    CodeMirror,
+    // please keep sure that even if not used, this is loaded last
+    custom
+    ) {
+    "use strict";
 
-// for the time beeing, we have to pass marked as a parameter here,
-// as injecting require.js make marked not to put itself in the globals,
-// which make both this file fail at setting marked configuration, and textcell.js
-// which search marked into global.
-require(['components/marked/lib/marked'],
+    // compat with old IPython, remove for IPython > 3.0
+    window.CodeMirror = CodeMirror;
 
-function (marked) {
+    var common_options = {
+        ws_url : utils.get_body_data("wsUrl"),
+        base_url : utils.get_body_data("baseUrl"),
+        notebook_path : utils.get_body_data("notebookPath"),
+        notebook_name : utils.get_body_data('notebookName')
+    };
 
-    window.marked = marked
-
-    // monkey patch CM to be able to syntax highlight cell magics
-    // bug reported upstream,
-    // see https://github.com/marijnh/CodeMirror2/issues/670
-    if(CodeMirror.getMode(1,'text/plain').indent == undefined ){
-        console.log('patching CM for undefined indent');
-        CodeMirror.modes.null = function() {
-            return {token: function(stream) {stream.skipToEnd();},indent : function(){return 0}}
-        }
-    }
-
-    CodeMirror.patchedGetMode = function(config, mode){
-            var cmmode = CodeMirror.getMode(config, mode);
-            if(cmmode.indent == null)
-            {
-                console.log('patch mode "' , mode, '" on the fly');
-                cmmode.indent = function(){return 0};
-            }
-            return cmmode;
-        }
-    // end monkey patching CodeMirror
-
-    IPython.mathjaxutils.init();
-
-    $('#ipython-main-app').addClass('border-box-sizing');
-    $('div#notebook_panel').addClass('border-box-sizing');
-
-    var baseProjectUrl = $('body').data('baseProjectUrl');
-    var notebookPath = $('body').data('notebookPath');
-    var notebookName = $('body').data('notebookName');
-    notebookName = decodeURIComponent(notebookName);
-    notebookPath = decodeURIComponent(notebookPath);
-    console.log(notebookName);
-    if (notebookPath == 'None'){
-        notebookPath = "";
-    }
-
-    IPython.page = new IPython.Page();
-    IPython.layout_manager = new IPython.LayoutManager();
-    IPython.pager = new IPython.Pager('div#pager', 'div#pager_splitter');
-    IPython.quick_help = new IPython.QuickHelp();
-    IPython.login_widget = new IPython.LoginWidget('span#login_widget',{baseProjectUrl:baseProjectUrl});
-    IPython.notebook = new IPython.Notebook('div#notebook',{baseProjectUrl:baseProjectUrl, notebookPath:notebookPath, notebookName:notebookName});
-    IPython.save_widget = new IPython.SaveWidget('span#save_widget');
-    IPython.menubar = new IPython.MenuBar('#menubar',{baseProjectUrl:baseProjectUrl, notebookPath: notebookPath})
-    IPython.toolbar = new IPython.MainToolBar('#maintoolbar-container')
-    IPython.tooltip = new IPython.Tooltip()
-    IPython.notification_area = new IPython.NotificationArea('#notification_area')
-    IPython.notification_area.init_notification_widgets();
-
-    IPython.layout_manager.do_resize();
+    var user_config = $.extend({}, config.default_config);
+    var page = new page.Page();
+    var layout_manager = new layoutmanager.LayoutManager();
+    var pager = new pager.Pager('div#pager', 'div#pager_splitter', {
+        layout_manager: layout_manager, 
+        events: events});
+    var keyboard_manager = new keyboardmanager.KeyboardManager({
+        pager: pager, 
+        events: events});
+    var save_widget = new savewidget.SaveWidget('span#save_widget', {
+        events: events, 
+        keyboard_manager: keyboard_manager});
+    var notebook = new notebook.Notebook('div#notebook', $.extend({
+        events: events,
+        keyboard_manager: keyboard_manager,
+        save_widget: save_widget,
+        config: user_config},
+        common_options));
+    var login_widget = new loginwidget.LoginWidget('span#login_widget', common_options);
+    var toolbar = new maintoolbar.MainToolBar('#maintoolbar-container', {
+        notebook: notebook, 
+        events: events}); 
+    var quick_help = new quickhelp.QuickHelp({
+        keyboard_manager: keyboard_manager, 
+        events: events,
+        notebook: notebook});
+    var menubar = new menubar.MenuBar('#menubar', $.extend({
+        notebook: notebook, 
+        layout_manager: layout_manager, 
+        events: events, 
+        save_widget: save_widget, 
+        quick_help: quick_help}, 
+        common_options));
+    var notification_area = new notificationarea.NotificationArea(
+        '#notification_area', {
+        events: events, 
+        save_widget: save_widget, 
+        notebook: notebook,
+        keyboard_manager: keyboard_manager});
+    notification_area.init_notification_widgets();
+    var kernel_selector = new kernelselector.KernelSelector(
+        '#kernel_selector_widget', notebook);
 
     $('body').append('<div id="fonttest"><pre><span id="test1">x</span>'+
                      '<span id="test2" style="font-weight: bold;">x</span>'+
-                     '<span id="test3" style="font-style: italic;">x</span></pre></div>')
+                     '<span id="test3" style="font-style: italic;">x</span></pre></div>');
     var nh = $('#test1').innerHeight();
     var bh = $('#test2').innerHeight();
     var ih = $('#test3').innerHeight();
@@ -82,45 +110,37 @@ function (marked) {
     }
     $('#fonttest').remove();
 
-    IPython.page.show();
+    page.show();
 
-    IPython.layout_manager.do_resize();
+    layout_manager.do_resize();
     var first_load = function () {
-        IPython.layout_manager.do_resize();
+        layout_manager.do_resize();
         var hash = document.location.hash;
         if (hash) {
             document.location.hash = '';
             document.location.hash = hash;
         }
-        IPython.notebook.set_autosave_interval(IPython.notebook.minimum_autosave_interval);
+        notebook.set_autosave_interval(notebook.minimum_autosave_interval);
         // only do this once
-        $([IPython.events]).off('notebook_loaded.Notebook', first_load);
+        events.off('notebook_loaded.Notebook', first_load);
     };
+    events.on('notebook_loaded.Notebook', first_load);
     
-    $([IPython.events]).on('notebook_loaded.Notebook', first_load);
-    $([IPython.events]).trigger('app_initialized.NotebookApp');
-    IPython.notebook.load_notebook(notebookName, notebookPath);
+    IPython.page = page;
+    IPython.layout_manager = layout_manager;
+    IPython.notebook = notebook;
+    IPython.pager = pager;
+    IPython.quick_help = quick_help;
+    IPython.login_widget = login_widget;
+    IPython.menubar = menubar;
+    IPython.toolbar = toolbar;
+    IPython.notification_area = notification_area;
+    IPython.keyboard_manager = keyboard_manager;
+    IPython.save_widget = save_widget;
+    IPython.config = user_config;
+    IPython.tooltip = notebook.tooltip;
 
-    if (marked) {
-        marked.setOptions({
-            gfm : true,
-            tables: true,
-            langPrefix: "language-",
-            highlight: function(code, lang) {
-                if (!lang) {
-                    // no language, no highlight
-                    return code;
-                }
-                var highlighted;
-                try {
-                    highlighted = hljs.highlight(lang, code, false);
-                } catch(err) {
-                    highlighted = hljs.highlightAuto(code);
-                }
-                return highlighted.value;
-            }
-        })
-    }
-}
+    events.trigger('app_initialized.NotebookApp');
+    notebook.load_notebook(common_options.notebook_name, common_options.notebook_path);
 
-);
+});

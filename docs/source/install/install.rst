@@ -13,7 +13,7 @@ the quickest way to get up and running with IPython is:
 
 .. code-block:: bash
 
-    $ easy_install ipython[all]
+    $ pip install "ipython[all]"
 
 This will download and install IPython and its main optional dependencies:
 
@@ -32,16 +32,6 @@ To run IPython's test suite, use the :command:`iptest` command:
 
     $ iptest
 
-.. note::
-
-    .. code-block:: bash
-
-        $ pip install ipython[all]
-    
-    will also work in many cases, but it will ignore the binary eggs
-    of packages such as pyzmq and readline,
-    which may be required for some users on Windows or OS X.
-
 
 Overview
 ========
@@ -58,11 +48,10 @@ install all of its dependencies.
 
 Please let us know if you have problems installing IPython or any of its dependencies.
 
-IPython and most dependencies can be installed via :command:`easy_install`,
-provided by the :mod:`setuptools` package, or :command:`pip`.
-In many scenarios, this is the most simplest method of installing Python packages.
-More information about :mod:`setuptools` can be found on
-`its PyPI page <http://pypi.python.org/pypi/setuptools>`__.
+IPython and most dependencies can be installed via :command:`pip`.
+In many scenarios, this is the simplest method of installing Python packages.
+More information about :mod:`pip` can be found on
+`its PyPI page <http://pypi.python.org/pypi/pip>`__.
 
 .. note::
 
@@ -83,15 +72,15 @@ with no external dependencies.  However, some Python distributions
 module.  The IPython shell will work without :mod:`readline`, but will lack
 many features that users depend on, such as tab completion and command line
 editing.  If you install IPython with :mod:`setuptools`, (e.g. with
-`easy_install`), then the appropriate :mod:`readline` for your platform will be
+`pip`), then the appropriate :mod:`readline` for your platform will be
 installed.  See below for details of how to make sure you have a working
 :mod:`readline`.
 
-Installation using easy_install or pip
---------------------------------------
+Installation using pip
+----------------------
 
 If you have :mod:`setuptools` or :mod:`pip`, the easiest way of getting IPython is
-to simply use :command:`easy_install` or :command:`pip`:
+to simply use :command:`pip`:
 
 .. code-block:: bash
 
@@ -99,17 +88,11 @@ to simply use :command:`easy_install` or :command:`pip`:
 
 That's it.
 
-.. note::
-
-    Many prefer :command:`pip` to :command:`easy_install`, but it ignores eggs (binary Python packages).
-    This mainly affects pyzmq and readline, which are compiled packages and provide
-    binary eggs.  If you use :command:`pip` to install these packages,
-    it will always compile from source, which may not succeed.
 
 Installation from source
 ------------------------
 
-If you don't want to use :command:`easy_install`, or don't have it installed,
+If you don't want to use :command:`pip`, or don't have it installed,
 just grab the latest stable build of IPython from `here
 <http://ipython.org/download.html>`_.  Then do the following:
 
@@ -133,7 +116,7 @@ Windows, the installation procedure is:
 1. Install `setuptools <http://pypi.python.org/pypi/setuptools>`_.
 
 2. Install `pyreadline <http://pypi.python.org/pypi/pyreadline>`_.  You can use
-   the command ``easy_install pyreadline`` from a terminal, or the binary
+   the command ``pip install pyreadline`` from a terminal, or the binary
    installer appropriate for your platform from the PyPI page.
 
 3. Install IPython itself, which you can download from `PyPI
@@ -174,12 +157,30 @@ step by:
     $ python setupegg.py develop
 
 This creates links in the right places and installs the command line script to
-the appropriate places.  Then, if you want to update your IPython at any time,
+the appropriate places. 
+
+Then, if you want to update your IPython at any time,
 just do:
 
 .. code-block:: bash
 
     $ git pull
+
+IPython now uses git submodules to ship its javascript dependencies. If you run 
+IPython from git master, you may need to update submodules once in a while with:
+
+.. code-block:: bash
+
+    $ git submodule update
+
+or
+
+.. code-block:: bash
+
+    $ python setup.py submodule
+
+Another option is to copy `git hooks <https://github.com/ipython/ipython/tree/master/git-hooks>`_
+to your ``./git/hooks/`` directory to ensure that your submodules are up to date on each pull.
 
 
 Basic optional dependencies
@@ -190,48 +191,53 @@ get.  These are:
 
 * readline (for command line editing, tab completion, etc.)
 * nose (to run the IPython test suite)
-* pexpect (to use things like irunner)
 
 If you are comfortable installing these things yourself, have at it, otherwise
 read on for more details.
 
+IPython uses several other modules, such as pexpect_ and path.py, if they are
+installed on your system, but it can also use bundled versions from
+:mod:`IPython.external`, so there's no need to install them separately.
+
 readline
 --------
 
-As indicated above, on Windows, PyReadline is a *mandatory* dependency.
+As indicated above, on Windows, to get full functionality in the console
+version of IPython, PyReadline is needed.
 PyReadline is a separate, Windows only implementation of readline that uses
 native Windows calls through :mod:`ctypes`. The easiest way of installing
 PyReadline is you use the binary installer available `here
 <http://pypi.python.org/pypi/pyreadline>`__.
 
 On OSX, if you are using the built-in Python shipped by Apple, you will be
-missing a full readline implementation as Apple ships instead a library called
+missing a proper readline implementation as Apple ships instead a library called
 ``libedit`` that provides only some of readline's functionality.  While you may
 find libedit sufficient, we have occasional reports of bugs with it and several
 developers who use OS X as their main environment consider libedit unacceptable
 for productive, regular use with IPython.
 
-Therefore, we *strongly* recommend that on OS X you get the full
-:mod:`readline` module.  We will *not* consider completion/history problems to
-be bugs for IPython if you are using libedit.
+Therefore, IPython on OS X depends on the :mod:`gnureadline` module.
+We will *not* consider completion/history problems to be bugs for IPython if you are using libedit.
 
-To get a working :mod:`readline` module, just do (with :mod:`setuptools`
+To get a working :mod:`readline` module on OS X, just do (with :mod:`pip`
 installed):
 
 .. code-block:: bash
 
-    $ easy_install readline
+    $ pip install gnureadline
 
 .. note::
 
-    Other Python distributions on OS X (such as fink, MacPorts and the official
-    python.org binaries) already have readline installed so you likely don't
-    have to do this step.
+    Other Python distributions on OS X (such as Anaconda, fink, MacPorts)
+    already have proper readline so you likely don't have to do this step.
 
 When IPython is installed with :mod:`setuptools`, (e.g. using the
-``easy_install`` command), readline is added as a dependency on OS X, and
-PyReadline on Windows, and will be installed on your system.  However, if you
-do not use setuptools, you may have to install one of these packages yourself.
+``pip`` command), the correct readline should be installed if you specify the `terminal`
+optional dependencies:
+
+.. code-block:: bash
+
+    $ pip install "ipython[terminal]"
 
 
 nose
@@ -239,7 +245,7 @@ nose
 
 To run the IPython test suite you will need the :mod:`nose` package.  Nose
 provides a great way of sniffing out and running all of the IPython tests.  The
-simplest way of getting nose is to use :command:`easy_install` or :command:`pip`:
+simplest way of getting nose is to use :command:`pip`:
 
 .. code-block:: bash
 
@@ -249,7 +255,7 @@ Another way of getting this is to do:
 
 .. code-block:: bash
 
-    $ pip install ipython[test]
+    $ pip install "ipython[test]"
 
 For more installation options, see the `nose website
 <http://somethingaboutorange.com/mrl/projects/nose/>`_.  
@@ -260,25 +266,6 @@ iptest command:
 .. code-block:: bash
 
     $ iptest
-
-pexpect
--------
-
-The pexpect_ package is used in IPython's :command:`irunner` script, as well as
-for managing subprocesses. IPython now includes a version of pexpect in
-:mod:`IPython.external`, but if you have installed pexpect, IPython will use
-that instead. On Unix platforms (including OS X), just do:
-
-.. code-block:: bash
-
-    $ pip install pexpect
-    
-.. note::
-
-    On Python 3, you should actually install :mod:`pexpect-u`,
-    a unicode-safe fork of pexpect.
-
-Windows users are out of luck as pexpect does not run there.
 
 Dependencies for IPython.parallel (parallel computing)
 ======================================================
@@ -292,7 +279,7 @@ On a Unix style platform (including OS X), if you want to use
 
 .. code-block:: bash
 
-    $ easy_install ipython[zmq]    # will include pyzmq
+    $ pip install "ipython[zmq]"    # will include pyzmq
 
 Security in IPython.parallel is provided by SSH tunnels.  By default, Linux
 and OSX clients will use the shell ssh command, but on Windows, we also
@@ -306,11 +293,11 @@ pyzmq
 
 IPython 0.11 introduced some new functionality, including a two-process
 execution model using ZeroMQ_ for communication. The Python bindings to ZeroMQ
-are found in the PyZMQ_ project, which is easy_install-able once you have
-ZeroMQ installed.  If you are on Python 2.6 or 2.7 on OSX, or 2.7 on Windows,
-pyzmq has eggs that include ZeroMQ itself.
+are found in the PyZMQ_ project, which is pip install-able.
+If you are on Python 2.7, 3.3, or 3.4 on OSX or Windows,
+pyzmq has eggs and wheels that include ZeroMQ itself.
 
-IPython.kernel.zmq depends on pyzmq >= 2.1.4.
+IPython.kernel.zmq depends on pyzmq >= 2.2.
 
 Dependencies for the IPython QT console
 =======================================
@@ -326,15 +313,14 @@ Qt
 
 Also with 0.11, a new GUI was added using the work in :mod:`IPython.kernel.zmq`, which
 can be launched with ``ipython qtconsole``. The GUI is built on Qt, and works
-with either PyQt, which can be installed from the `PyQt website
-<http://www.riverbankcomputing.co.uk/>`_, or `PySide
-<http://www.pyside.org/>`_, from Nokia.
+with either `PyQt <http://www.riverbankcomputing.co.uk/>`_, or `PySide
+<http://qt-project.org/wiki/PySide>`_.
 
 pygments
 --------
 
 The syntax-highlighting in ``ipython qtconsole`` is done with the pygments_
-project, which is easy_install-able.
+project, which is pip install-able.
 
 .. _installnotebook:
 
@@ -394,7 +380,7 @@ of :mod:`IPython.external.mathjax`
 Browser Compatibility
 ---------------------
 
-The IPython notebook is officially supported on the following browers:
+The IPython notebook is officially supported on the following browsers:
 
 * Chrome ≥ 13
 * Safari ≥ 5
@@ -414,7 +400,7 @@ The following specific combinations are known **NOT** to work:
 
 * Safari, IPython 0.12, tornado ≥ 2.2.0
 * Safari with HTTPS connection to notebook and an untrusted certificate (websockets will fail)
-* The [diigo Chrome extension](http://help.diigo.com/tools/chrome-extension) seems to interfere with scrolling
+* The `diigo Chrome extension <http://help.diigo.com/tools/chrome-extension>`_ seems to interfere with scrolling
 
 There are some early reports that the Notebook works on Internet Explorer 10, but we
 expect there will be some CSS issues related to the flexible box model.
@@ -440,7 +426,7 @@ On other platforms, you can get pandoc from `their website <http://johnmacfarlan
 .. _PyZMQ: https://github.com/zeromq/pyzmq
 .. _paramiko: https://github.com/robey/paramiko
 .. _pygments: http://pygments.org
-.. _pexpect: http://www.noah.org/wiki/Pexpect
+.. _pexpect: http://pexpect.readthedocs.org/en/latest/
 .. _Jinja: http://jinja.pocoo.org
 .. _Sphinx: http://sphinx-doc.org
 .. _pandoc: http://johnmacfarlane.net/pandoc

@@ -4,22 +4,11 @@
 Historically the main classes in interactiveshell have been under-tested.  This
 module should grow as many single-method tests as possible to trap many of the
 recurring bugs we seem to encounter with high-level interaction.
-
-Authors
--------
-* Fernando Perez
 """
-#-----------------------------------------------------------------------------
-#  Copyright (C) 2011  The IPython Development Team
-#
-#  Distributed under the terms of the BSD License.  The full license is in
-#  the file COPYING, distributed as part of this software.
-#-----------------------------------------------------------------------------
 
-#-----------------------------------------------------------------------------
-# Imports
-#-----------------------------------------------------------------------------
-# stdlib
+# Copyright (c) IPython Development Team.
+# Distributed under the terms of the Modified BSD License.
+
 import ast
 import os
 import signal
@@ -27,15 +16,22 @@ import shutil
 import sys
 import tempfile
 import unittest
+try:
+    from unittest import mock
+except ImportError:
+    import mock
 from os.path import join
 
-# third-party
 import nose.tools as nt
 
-# Our own
-from IPython.testing.decorators import skipif, skip_win32, onlyif_unicode_paths
+from IPython.core.error import InputRejected
+from IPython.core.inputtransformer import InputTransformer
+from IPython.testing.decorators import (
+    skipif, skip_win32, onlyif_unicode_paths, onlyif_cmds_exist,
+)
 from IPython.testing import tools as tt
 from IPython.utils import io
+from IPython.utils.process import find_cmd
 from IPython.utils import py3compat
 from IPython.utils.py3compat import unicode_type, PY3
 
@@ -93,13 +89,17 @@ class InteractiveShellTestCase(unittest.TestCase):
     def test_dont_cache_with_semicolon(self):
         "Ending a line with semicolon should not cache the returned object (GH-307)"
         oldlen = len(ip.user_ns['Out'])
-        a = ip.run_cell('1;', store_history=True)
-        newlen = len(ip.user_ns['Out'])
-        self.assertEqual(oldlen, newlen)
+        for cell in ['1;', '1;1;']:
+            ip.run_cell(cell, store_history=True)
+            newlen = len(ip.user_ns['Out'])
+            self.assertEqual(oldlen, newlen)
+        i = 0
         #also test the default caching behavior
-        ip.run_cell('1', store_history=True)
-        newlen = len(ip.user_ns['Out'])
-        self.assertEqual(oldlen+1, newlen)
+        for cell in ['1', '1;1']:
+            ip.run_cell(cell, store_history=True)
+            newlen = len(ip.user_ns['Out'])
+            i += 1
+            self.assertEqual(oldlen+i, newlen)
 
     def test_In_variable(self):
         "Verify that In variable grows with user input (GH-284)"
@@ -276,21 +276,32 @@ class InteractiveShellTestCase(unittest.TestCase):
         # ZeroDivisionError
         self.assertEqual(ip.var_expand(u"{1/0}"), u"{1/0}")
     
-    def test_silent_nopostexec(self):
-        """run_cell(silent=True) doesn't invoke post-exec funcs"""
-        d = dict(called=False)
-        def set_called():
-            d['called'] = True
+    def test_silent_postexec(self):
+        """run_cell(silent=True) doesn't invoke pre/post_run_cell callbacks"""
+        pre_explicit = mock.Mock()
+        pre_always = mock.Mock()
+        post_explicit = mock.Mock()
+        post_always = mock.Mock()
         
-        ip.register_post_execute(set_called)
-        ip.run_cell("1", silent=True)
-        self.assertFalse(d['called'])
-        # double-check that non-silent exec did what we expected
-        # silent to avoid
-        ip.run_cell("1")
-        self.assertTrue(d['called'])
-        # remove post-exec
-        ip._post_execute.pop(set_called)
+        ip.events.register('pre_run_cell', pre_explicit)
+        ip.events.register('pre_execute', pre_always)
+        ip.events.register('post_run_cell', post_explicit)
+        ip.events.register('post_execute', post_always)
+        
+        try:
+            ip.run_cell("1", silent=True)
+            assert pre_always.called
+            assert not pre_explicit.called
+            assert post_always.called
+            assert not post_explicit.called
+            # double-check that non-silent exec did what we expected
+            # silent to avoid
+            ip.run_cell("1")
+            assert pre_explicit.called
+            assert post_explicit.called
+        finally:
+            # remove post-exec
+            ip.events.reset_all()
     
     def test_silent_noadvance(self):
         """run_cell(silent=True) doesn't advance execution_count"""
@@ -365,7 +376,62 @@ class InteractiveShellTestCase(unittest.TestCase):
                     namespace = 'IPython internal', obj= cmagic.__wrapped__,
                     parent = None)
         nt.assert_equal(find, info)
-    
+
+    def test_ofind_property_with_error(self):
+        class A(object):
+            @property
+            def foo(self):
+                raise NotImplementedError()
+        a = A()
+
+        found = ip._ofind('a.foo', [('locals', locals())])
+        info = dict(found=True, isalias=False, ismagic=False,
+                    namespace='locals', obj=A.foo, parent=a)
+        nt.assert_equal(found, info)
+
+    def test_ofind_multiple_attribute_lookups(self):
+        class A(object):
+            @property
+            def foo(self):
+                raise NotImplementedError()
+
+        a = A()
+        a.a = A()
+        a.a.a = A()
+
+        found = ip._ofind('a.a.a.foo', [('locals', locals())])
+        info = dict(found=True, isalias=False, ismagic=False,
+                    namespace='locals', obj=A.foo, parent=a.a.a)
+        nt.assert_equal(found, info)
+
+    def test_ofind_slotted_attributes(self):
+        class A(object):
+            __slots__ = ['foo']
+            def __init__(self):
+                self.foo = 'bar'
+
+        a = A()
+        found = ip._ofind('a.foo', [('locals', locals())])
+        info = dict(found=True, isalias=False, ismagic=False,
+                    namespace='locals', obj=a.foo, parent=a)
+        nt.assert_equal(found, info)
+
+        found = ip._ofind('a.bar', [('locals', locals())])
+        info = dict(found=False, isalias=False, ismagic=False,
+                    namespace=None, obj=None, parent=a)
+        nt.assert_equal(found, info)
+
+    def test_ofind_prefers_property_to_instance_level_attribute(self):
+        class A(object):
+            @property
+            def foo(self):
+                return 'bar'
+        a = A()
+        a.__dict__['foo'] = 'baz'
+        nt.assert_equal(a.foo, 'bar')
+        found = ip._ofind('a.foo', [('locals', locals())])
+        nt.assert_is(found['obj'], A.foo)
+
     def test_custom_exception(self):
         called = []
         def my_handler(shell, etype, value, tb, tb_offset=None):
@@ -397,6 +463,21 @@ class InteractiveShellTestCase(unittest.TestCase):
         ip.run_cell("d = 1/2", shell_futures=True)
         self.assertEqual(ip.user_ns['d'], 0)
 
+    def test_mktempfile(self):
+        filename = ip.mktempfile()
+        # Check that we can open the file again on Windows
+        with open(filename, 'w') as f:
+            f.write('abc')
+
+        filename = ip.mktempfile(data='blah')
+        with open(filename, 'r') as f:
+            self.assertEqual(f.read(), 'blah')
+
+    def test_new_main_mod(self):
+        # Smoketest to check that this accepts a unicode module name
+        name = u'jiefmw'
+        mod = ip.new_main_mod(u'%s.py' % name, name)
+        self.assertEqual(mod.__name__, name)
 
 class TestSafeExecfileNonAsciiPath(unittest.TestCase):
 
@@ -429,7 +510,7 @@ class ExitCodeChecks(tt.TempFileMixin):
     def test_exit_code_error(self):
         self.system('exit 1')
         self.assertEqual(ip.user_ns['_exit_code'], 1)
-
+    
     @skipif(not hasattr(signal, 'SIGALRM'))
     def test_exit_code_signal(self):
         self.mktmp("import signal, time\n"
@@ -437,6 +518,18 @@ class ExitCodeChecks(tt.TempFileMixin):
                    "time.sleep(1)\n")
         self.system("%s %s" % (sys.executable, self.fname))
         self.assertEqual(ip.user_ns['_exit_code'], -signal.SIGALRM)
+    
+    @onlyif_cmds_exist("csh")
+    def test_exit_code_signal_csh(self):
+        SHELL = os.environ.get('SHELL', None)
+        os.environ['SHELL'] = find_cmd("csh")
+        try:
+            self.test_exit_code_signal()
+        finally:
+            if SHELL is not None:
+                os.environ['SHELL'] = SHELL
+            else:
+                del os.environ['SHELL']
 
 class TestSystemRaw(unittest.TestCase, ExitCodeChecks):
     system = ip.system_raw
@@ -589,7 +682,7 @@ class TestAstTransform2(unittest.TestCase):
 
 class ErrorTransformer(ast.NodeTransformer):
     """Throws an error when it sees a number."""
-    def visit_Num(self):
+    def visit_Num(self, node):
         raise ValueError("test")
 
 class TestAstTransformError(unittest.TestCase):
@@ -602,6 +695,41 @@ class TestAstTransformError(unittest.TestCase):
         
         # This should have been removed.
         nt.assert_not_in(err_transformer, ip.ast_transformers)
+
+
+class StringRejector(ast.NodeTransformer):
+    """Throws an InputRejected when it sees a string literal.
+
+    Used to verify that NodeTransformers can signal that a piece of code should
+    not be executed by throwing an InputRejected.
+    """
+
+    def visit_Str(self, node):
+        raise InputRejected("test")
+
+
+class TestAstTransformInputRejection(unittest.TestCase):
+
+    def setUp(self):
+        self.transformer = StringRejector()
+        ip.ast_transformers.append(self.transformer)
+
+    def tearDown(self):
+        ip.ast_transformers.remove(self.transformer)
+
+    def test_input_rejection(self):
+        """Check that NodeTransformers can reject input."""
+
+        expect_exception_tb = tt.AssertPrints("InputRejected: test")
+        expect_no_cell_output = tt.AssertNotPrints("'unsafe'", suppress=False)
+
+        # Run the same check twice to verify that the transformer is not
+        # disabled after raising.
+        with expect_exception_tb, expect_no_cell_output:
+            ip.run_cell("'unsafe'")
+
+        with expect_exception_tb, expect_no_cell_output:
+            ip.run_cell("'unsafe'")
 
 def test__IPYTHON__():
     # This shouldn't raise a NameError, that's all
@@ -625,7 +753,7 @@ def test_user_variables():
     
     ip.user_ns['dummy'] = d = DummyRepr()
     keys = set(['dummy', 'doesnotexist'])
-    r = ip.user_variables(keys)
+    r = ip.user_expressions({ key:key for key in keys})
 
     nt.assert_equal(keys, set(r.keys()))
     dummy = r['dummy']
@@ -640,7 +768,7 @@ def test_user_variables():
     
     dne = r['doesnotexist']
     nt.assert_equal(dne['status'], 'error')
-    nt.assert_equal(dne['ename'], 'KeyError')
+    nt.assert_equal(dne['ename'], 'NameError')
     
     # back to text only
     ip.display_formatter.active_types = ['text/plain']
@@ -655,7 +783,7 @@ def test_user_expression():
     r = ip.user_expressions(query)
     import pprint
     pprint.pprint(r)
-    nt.assert_equal(r.keys(), query.keys())
+    nt.assert_equal(set(r.keys()), set(query.keys()))
     a = r['a']
     nt.assert_equal(set(['status', 'data', 'metadata']), set(a.keys()))
     nt.assert_equal(a['status'], 'ok')
@@ -672,6 +800,43 @@ def test_user_expression():
     
 
 
+
+
+class TestSyntaxErrorTransformer(unittest.TestCase):
+    """Check that SyntaxError raised by an input transformer is handled by run_cell()"""
+
+    class SyntaxErrorTransformer(InputTransformer):
+
+        def push(self, line):
+            pos = line.find('syntaxerror')
+            if pos >= 0:
+                e = SyntaxError('input contains "syntaxerror"')
+                e.text = line
+                e.offset = pos + 1
+                raise e
+            return line
+
+        def reset(self):
+            pass
+
+    def setUp(self):
+        self.transformer = TestSyntaxErrorTransformer.SyntaxErrorTransformer()
+        ip.input_splitter.python_line_transforms.append(self.transformer)
+        ip.input_transformer_manager.python_line_transforms.append(self.transformer)
+
+    def tearDown(self):
+        ip.input_splitter.python_line_transforms.remove(self.transformer)
+        ip.input_transformer_manager.python_line_transforms.remove(self.transformer)
+
+    def test_syntaxerror_input_transformer(self):
+        with tt.AssertPrints('1234'):
+            ip.run_cell('1234')
+        with tt.AssertPrints('SyntaxError: invalid syntax'):
+            ip.run_cell('1 2 3')   # plain python syntax error
+        with tt.AssertPrints('SyntaxError: input contains "syntaxerror"'):
+            ip.run_cell('2345  # syntaxerror')  # input transformer syntax error
+        with tt.AssertPrints('3456'):
+            ip.run_cell('3456')
 
 
 

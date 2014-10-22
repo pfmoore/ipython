@@ -235,7 +235,11 @@ class CodeMagics(Magics):
             print(e.args[0])
             return
 
-        from urllib2 import urlopen  # Deferred import
+        # Deferred import
+        try:
+            from urllib.request import urlopen # Py 3
+        except ImportError:
+            from urllib2 import urlopen
         import json
         post_data = json.dumps({
           "description": opts.get('d', "Pasted from IPython"),
@@ -268,10 +272,11 @@ class CodeMagics(Magics):
         Usage:\\
           %load [options] source
 
-          where source can be a filename, URL, input history range or macro
+          where source can be a filename, URL, input history range, macro, or
+          element in the user namespace
 
         Options:
-        --------
+
           -r <lines>: Specify lines or ranges of lines to load from the source.
           Ranges could be specified as x-y (x..y) or in python-style x:y 
           (x..(y-1)). Both limits x and y can be left blank (meaning the 
@@ -280,6 +285,8 @@ class CodeMagics(Magics):
           -s <symbols>: Specify function or classes to load from python source. 
 
           -y : Don't ask confirmation for loading source above 200 000 characters.
+
+          -n : Include the user's namespace when searching for source code.
 
         This magic command can either take a local filename, a URL, an history
         range (see %history) or a macro as argument, it will prompt for
@@ -293,14 +300,18 @@ class CodeMagics(Magics):
         %load -r 5-10 myscript.py
         %load -r 10-20,30,40: foo.py
         %load -s MyClass,wonder_function myscript.py
+        %load -n MyClass
+        %load -n my_module.wonder_function
         """
-        opts,args = self.parse_options(arg_s,'ys:r:')
+        opts,args = self.parse_options(arg_s,'yns:r:')
 
         if not args:
             raise UsageError('Missing filename, URL, input history range, '
-                             'or macro.')
+                             'macro, or element in the user namespace.')
 
-        contents = self.shell.find_user_code(args)
+        search_ns = 'n' in opts
+
+        contents = self.shell.find_user_code(args, search_ns=search_ns)
 
         if 's' in opts:
             try:

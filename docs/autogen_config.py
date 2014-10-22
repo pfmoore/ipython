@@ -1,9 +1,10 @@
+#!/usr/bin/env python
+
 from IPython.utils.text import indent, wrap_paragraphs
 
 from IPython.terminal.ipapp import TerminalIPythonApp
 from IPython.kernel.zmq.kernelapp import IPKernelApp
 from IPython.html.notebookapp import NotebookApp
-from IPython.qt.console.qtconsoleapp import IPythonQtConsoleApp
 
 def document_config_options(classes):
     lines = []
@@ -48,27 +49,42 @@ def document_config_options(classes):
 
 kernel_classes = IPKernelApp().classes
 
-def write_doc(filename, title, classes, preamble=None):
+def write_doc(name, title, classes, preamble=None):
     configdoc = document_config_options(classes)
-    with open('source/config/options/%s.rst' % filename, 'w') as f:
+    filename = '%s.rst' % name
+    with open('source/config/options/%s' % filename, 'w') as f:
         f.write(title + '\n')
         f.write(('=' * len(title)) + '\n')
         f.write('\n')
         if preamble is not None:
             f.write(preamble + '\n\n')
         f.write(configdoc)
+    with open('source/config/options/generated', 'a') as f:
+        f.write(filename + '\n')
+
 
 if __name__ == '__main__':
-    write_doc('terminal', 'Terminal IPython options', TerminalIPythonApp().classes)
-    write_doc('kernel', 'IPython kernel options', kernel_classes,
-              preamble="These options can be used in :file:`ipython_notebook_config.py` "
-              "or in :file:`ipython_qtconsole_config.py`")
-    nbclasses = set(NotebookApp().classes) - set(kernel_classes)
-    write_doc('notebook', 'IPython notebook options', nbclasses,
-              preamble="Any of the :doc:`kernel` can also be used.")
-    qtclasses = set(IPythonQtConsoleApp().classes) - set(kernel_classes)
-    write_doc('qtconsole', 'IPython Qt console options', qtclasses,
-              preamble="Any of the :doc:`kernel` can also be used.")
-
+    # create empty file
     with open('source/config/options/generated', 'w'):
         pass
+
+    write_doc('terminal', 'Terminal IPython options', TerminalIPythonApp().classes)
+    write_doc('kernel', 'IPython kernel options', kernel_classes,
+        preamble="These options can be used in :file:`ipython_kernel_config.py`",
+    )
+    nbclasses = set(NotebookApp().classes) - set(kernel_classes)
+    write_doc('notebook', 'IPython notebook options', nbclasses,
+        preamble="To configure the IPython kernel, see :doc:`kernel`."
+    )
+
+    try:
+        from IPython.qt.console.qtconsoleapp import IPythonQtConsoleApp
+    except ImportError:
+        print("WARNING: Could not import qtconsoleapp. Config options for the "
+              "Qt Console will not be documented.")
+    else:
+        qtclasses = set(IPythonQtConsoleApp().classes) - set(kernel_classes)
+        write_doc('qtconsole', 'IPython Qt console options', qtclasses,
+        preamble="To configure the IPython kernel, see :doc:`kernel`."
+    )
+

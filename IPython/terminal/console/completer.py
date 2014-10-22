@@ -1,14 +1,20 @@
 # -*- coding: utf-8 -*-
-import readline
+"""Adapt readline completer interface to make ZMQ request."""
+
+# Copyright (c) IPython Development Team.
+# Distributed under the terms of the Modified BSD License.
+
 try:
     from queue import Empty  # Py 3
 except ImportError:
     from Queue import Empty  # Py 2
 
 from IPython.config import Configurable
+from IPython.core.completer import IPCompleter
 from IPython.utils.traitlets import Float
+import IPython.utils.rlineimpl as readline
 
-class ZMQCompleter(Configurable):
+class ZMQCompleter(IPCompleter):
     """Client-side completion machinery.
 
     How it works: self.complete will be called multiple times, with
@@ -24,14 +30,16 @@ class ZMQCompleter(Configurable):
         self.client =  client
         self.matches = []
         
-    def complete_request(self,text):
+    def complete_request(self, text):
         line = readline.get_line_buffer()
         cursor_pos = readline.get_endidx()
         
         # send completion request to kernel
         # Give the kernel up to 0.5s to respond
-        msg_id = self.client.shell_channel.complete(text=text, line=line,
-                                                        cursor_pos=cursor_pos)
+        msg_id = self.client.shell_channel.complete(
+            code=line,
+            cursor_pos=cursor_pos,
+        )
         
         msg = self.client.shell_channel.get_msg(timeout=self.timeout)
         if msg['parent_header']['msg_id'] == msg_id:

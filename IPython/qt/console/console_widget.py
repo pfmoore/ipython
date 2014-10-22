@@ -236,8 +236,8 @@ class ConsoleWidget(MetaQObjectHasTraits('NewBase', (LoggingConfigurable, QtGui.
     def __init__(self, parent=None, **kw):
         """ Create a ConsoleWidget.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         parent : QWidget, optional [default None]
             The parent for this widget.
         """
@@ -315,7 +315,7 @@ class ConsoleWidget(MetaQObjectHasTraits('NewBase', (LoggingConfigurable, QtGui.
         self._pending_text_flush_interval.setInterval(100)
         self._pending_text_flush_interval.setSingleShot(True)
         self._pending_text_flush_interval.timeout.connect(
-                                            self._flush_pending_stream)
+                                            self._on_flush_pending_stream_timer)
 
         # Set a monospaced font.
         self.reset_font()
@@ -519,7 +519,15 @@ class ConsoleWidget(MetaQObjectHasTraits('NewBase', (LoggingConfigurable, QtGui.
     #---------------------------------------------------------------------------
     # 'ConsoleWidget' public interface
     #---------------------------------------------------------------------------
-
+    
+    include_other_output = Bool(False, config=True,
+        help="""Whether to include output from clients
+        other than this one sharing the same kernel.
+        
+        Outputs are not displayed until enter is pressed.
+        """
+    )
+    
     def can_copy(self):
         """ Returns whether text can be copied to the clipboard.
         """
@@ -543,8 +551,8 @@ class ConsoleWidget(MetaQObjectHasTraits('NewBase', (LoggingConfigurable, QtGui.
     def clear(self, keep_input=True):
         """ Clear the console.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         keep_input : bool, optional (default True)
             If set, restores the old input buffer if a new prompt is written.
         """
@@ -580,8 +588,8 @@ class ConsoleWidget(MetaQObjectHasTraits('NewBase', (LoggingConfigurable, QtGui.
         """ Executes source or the input buffer, possibly prompting for more
         input.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         source : str, optional
 
             The source to execute. If not specified, the input buffer will be
@@ -600,14 +608,14 @@ class ConsoleWidget(MetaQObjectHasTraits('NewBase', (LoggingConfigurable, QtGui.
             entered by the user. The effect of this parameter depends on the
             subclass implementation.
 
-        Raises:
-        -------
+        Raises
+        ------
         RuntimeError
             If incomplete input is given and 'hidden' is True. In this case,
             it is not possible to prompt for more input.
 
-        Returns:
-        --------
+        Returns
+        -------
         A boolean indicating whether the source was executed.
         """
         # WARNING: The order in which things happen here is very particular, in
@@ -746,8 +754,8 @@ class ConsoleWidget(MetaQObjectHasTraits('NewBase', (LoggingConfigurable, QtGui.
     def paste(self, mode=QtGui.QClipboard.Clipboard):
         """ Paste the contents of the clipboard into the input region.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         mode : QClipboard::Mode, optional [default QClipboard::Clipboard]
 
             Controls which part of the system clipboard is used. This can be
@@ -919,7 +927,7 @@ class ConsoleWidget(MetaQObjectHasTraits('NewBase', (LoggingConfigurable, QtGui.
 
         # Adjust the prompt position if we have inserted before it. This is safe
         # because buffer truncation is disabled when not executing.
-        if before_prompt and not self._executing:
+        if before_prompt and (self._reading or not self._executing):
             diff = cursor.position() - start_pos
             self._append_before_prompt_pos += diff
             self._prompt_pos += diff
@@ -1060,8 +1068,8 @@ class ConsoleWidget(MetaQObjectHasTraits('NewBase', (LoggingConfigurable, QtGui.
         """ Given a KeyboardModifiers flags object, return whether the Control
         key is down.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         include_command : bool, optional (default True)
             Whether to treat the Command key as a (mutually exclusive) synonym
             for Control when in Mac OS.
@@ -1364,13 +1372,12 @@ class ConsoleWidget(MetaQObjectHasTraits('NewBase', (LoggingConfigurable, QtGui.
 
             elif key == QtCore.Qt.Key_Right:
                 original_block_number = cursor.blockNumber()
-                cursor.movePosition(QtGui.QTextCursor.Right,
+                self._control.moveCursor(QtGui.QTextCursor.Right,
                                 mode=anchormode)
                 if cursor.blockNumber() != original_block_number:
-                    cursor.movePosition(QtGui.QTextCursor.Right,
+                    self._control.moveCursor(QtGui.QTextCursor.Right,
                                         n=len(self._continuation_prompt),
                                         mode=anchormode)
-                self._set_cursor(cursor)
                 intercepted = True
 
             elif key == QtCore.Qt.Key_Home:
@@ -1472,6 +1479,8 @@ class ConsoleWidget(MetaQObjectHasTraits('NewBase', (LoggingConfigurable, QtGui.
                 self._control.setFocus()
             else:
                 self.layout().setCurrentWidget(self._control)
+                # re-enable buffer truncation after paging
+                self._control.document().setMaximumBlockCount(self.buffer_size)
             return True
 
         elif key in (QtCore.Qt.Key_Enter, QtCore.Qt.Key_Return,
@@ -1489,7 +1498,37 @@ class ConsoleWidget(MetaQObjectHasTraits('NewBase', (LoggingConfigurable, QtGui.
             QtGui.qApp.sendEvent(self._page_control, new_event)
             return True
 
+        # vi/less -like key bindings
+        elif key == QtCore.Qt.Key_J:
+            new_event = QtGui.QKeyEvent(QtCore.QEvent.KeyPress,
+                                        QtCore.Qt.Key_Down,
+                                        QtCore.Qt.NoModifier)
+            QtGui.qApp.sendEvent(self._page_control, new_event)
+            return True
+
+        # vi/less -like key bindings
+        elif key == QtCore.Qt.Key_K:
+            new_event = QtGui.QKeyEvent(QtCore.QEvent.KeyPress,
+                                        QtCore.Qt.Key_Up,
+                                        QtCore.Qt.NoModifier)
+            QtGui.qApp.sendEvent(self._page_control, new_event)
+            return True
+
         return False
+
+    def _on_flush_pending_stream_timer(self):
+        """ Flush the pending stream output and change the
+        prompt position appropriately.
+        """
+        cursor = self._control.textCursor()
+        cursor.movePosition(QtGui.QTextCursor.End)
+        pos = cursor.position()
+        self._flush_pending_stream()
+        cursor.movePosition(QtGui.QTextCursor.End)
+        diff = cursor.position() - pos
+        if diff > 0:
+            self._prompt_pos += diff
+            self._append_before_prompt_pos += diff
 
     def _flush_pending_stream(self):
         """ Flush out pending text into the widget. """
@@ -1570,7 +1609,16 @@ class ConsoleWidget(MetaQObjectHasTraits('NewBase', (LoggingConfigurable, QtGui.
             cursor = self._control.textCursor()
             text = self._get_block_plain_text(cursor.block())
             return text[len(prompt):]
-
+    
+    def _get_input_buffer_cursor_pos(self):
+        """Return the cursor position within the input buffer."""
+        cursor = self._control.textCursor()
+        cursor.setPosition(self._prompt_pos, QtGui.QTextCursor.KeepAnchor)
+        input_buffer = cursor.selection().toPlainText()
+        
+        # Don't count continuation prompts
+        return len(input_buffer.replace('\n' + self._continuation_prompt, '\n'))
+    
     def _get_input_buffer_cursor_prompt(self):
         """ Returns the (plain text) prompt for line of the input buffer that
             contains the cursor, or None if there is no such line.
@@ -1735,8 +1783,10 @@ class ConsoleWidget(MetaQObjectHasTraits('NewBase', (LoggingConfigurable, QtGui.
         # case input prompt is active.
         buffer_size = self._control.document().maximumBlockCount()
 
-        if self._executing and not flush and \
-                self._pending_text_flush_interval.isActive():
+        if (self._executing and not flush and
+                self._pending_text_flush_interval.isActive() and
+                cursor.position() == self._get_end_cursor().position()):
+            # Queue the text to insert in case it is being inserted at end
             self._pending_insert_text.append(text)
             if buffer_size > 0:
                 self._pending_insert_text = self._get_last_lines_from_list(
@@ -1868,8 +1918,8 @@ class ConsoleWidget(MetaQObjectHasTraits('NewBase', (LoggingConfigurable, QtGui.
         """ Displays text using the pager if it exceeds the height of the
         viewport.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         html : bool, optional (default False)
             If set, the text will be interpreted as HTML instead of plain text.
         """
@@ -1880,6 +1930,8 @@ class ConsoleWidget(MetaQObjectHasTraits('NewBase', (LoggingConfigurable, QtGui.
             if self.paging == 'custom':
                 self.custom_page_requested.emit(text)
             else:
+                # disable buffer truncation during paging
+                self._control.document().setMaximumBlockCount(0)
                 self._page_control.clear()
                 cursor = self._page_control.textCursor()
                 if html:
@@ -1903,11 +1955,8 @@ class ConsoleWidget(MetaQObjectHasTraits('NewBase', (LoggingConfigurable, QtGui.
         """
         Change the pager to `paging` style.
 
-        XXX: currently, this is limited to switching between 'hsplit' and
-        'vsplit'.
-
-        Parameters:
-        -----------
+        Parameters
+        ----------
         paging : string
             Either "hsplit", "vsplit", or "inside"
         """
@@ -2047,6 +2096,7 @@ class ConsoleWidget(MetaQObjectHasTraits('NewBase', (LoggingConfigurable, QtGui.
             there is not already a newline at the end of the buffer.
         """
         # Save the current end position to support _append*(before_prompt=True).
+        self._flush_pending_stream()
         cursor = self._get_end_cursor()
         self._append_before_prompt_pos = cursor.position()
 
@@ -2056,6 +2106,7 @@ class ConsoleWidget(MetaQObjectHasTraits('NewBase', (LoggingConfigurable, QtGui.
                                 QtGui.QTextCursor.KeepAnchor)
             if cursor.selection().toPlainText() != '\n':
                 self._append_block()
+                self._append_before_prompt_pos += 1
 
         # Write the prompt.
         self._append_plain_text(self._prompt_sep)

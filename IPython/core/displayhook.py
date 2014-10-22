@@ -2,39 +2,21 @@
 """Displayhook for IPython.
 
 This defines a callable class that IPython uses for `sys.displayhook`.
-
-Authors:
-
-* Fernando Perez
-* Brian Granger
-* Robert Kern
 """
 
-#-----------------------------------------------------------------------------
-#       Copyright (C) 2008-2011 The IPython Development Team
-#       Copyright (C) 2001-2007 Fernando Perez <fperez@colorado.edu>
-#
-#  Distributed under the terms of the BSD License.  The full license is in
-#  the file COPYING, distributed as part of this software.
-#-----------------------------------------------------------------------------
+# Copyright (c) IPython Development Team.
+# Distributed under the terms of the Modified BSD License.
 
-#-----------------------------------------------------------------------------
-# Imports
-#-----------------------------------------------------------------------------
 from __future__ import print_function
 
 import sys
 
-
+from IPython.core.formatters import _safe_get_formatter_method
 from IPython.config.configurable import Configurable
 from IPython.utils import io
 from IPython.utils.py3compat import builtin_mod
 from IPython.utils.traitlets import Instance
 from IPython.utils.warn import warn
-
-#-----------------------------------------------------------------------------
-# Main displayhook class
-#-----------------------------------------------------------------------------
 
 # TODO: Move the various attributes (cache_size, [others now moved]). Some
 # of these are also attributes of InteractiveShell. They should be on ONE object
@@ -100,12 +82,10 @@ class DisplayHook(Configurable):
         # do not print output if input ends in ';'
         try:
             cell = self.shell.history_manager.input_hist_parsed[self.prompt_count]
-            if cell.rstrip().endswith(';'):
-                return True
+            return cell.rstrip().endswith(';')
         except IndexError:
             # some uses of ipshellembed may fail here
-            pass
-        return False
+            return False
 
     def start_displayhook(self):
         """Start the displayhook, initializing resources."""
@@ -170,6 +150,9 @@ class DisplayHook(Configurable):
         md_dict : dict (optional)
             The metadata dict to be associated with the display data.
         """
+        if 'text/plain' not in format_dict:
+            # nothing to do
+            return
         # We want to print because we want to always make sure we have a
         # newline, even if all the prompt separators are ''. This is the
         # standard IPython behavior.
@@ -223,6 +206,9 @@ class DisplayHook(Configurable):
 
     def log_output(self, format_dict):
         """Log the output."""
+        if 'text/plain' not in format_dict:
+            # nothing to do
+            return
         if self.shell.logger.log_output:
             self.shell.logger.log_write(format_dict['text/plain'], 'output')
         self.shell.history_manager.output_hist_reprs[self.prompt_count] = \
@@ -241,6 +227,14 @@ class DisplayHook(Configurable):
         """
         self.check_for_underscore()
         if result is not None and not self.quiet():
+            # If _ipython_display_ is defined, use that to display this object.
+            display_method = _safe_get_formatter_method(result, '_ipython_display_')
+            if display_method is not None:
+                try:
+                    return display_method()
+                except NotImplementedError:
+                    pass
+            
             self.start_displayhook()
             self.write_output_prompt()
             format_dict, md_dict = self.compute_format_data(result)

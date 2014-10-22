@@ -1,26 +1,12 @@
-"""Tests for parallel client.py
+"""Tests for parallel client.py"""
 
-Authors:
-
-* Min RK
-"""
-
-#-------------------------------------------------------------------------------
-#  Copyright (C) 2011  The IPython Development Team
-#
-#  Distributed under the terms of the BSD License.  The full license is in
-#  the file COPYING, distributed as part of this software.
-#-------------------------------------------------------------------------------
-
-#-------------------------------------------------------------------------------
-# Imports
-#-------------------------------------------------------------------------------
+# Copyright (c) IPython Development Team.
+# Distributed under the terms of the Modified BSD License.
 
 from __future__ import division
 
 import time
 from datetime import datetime
-from tempfile import mktemp
 
 import zmq
 
@@ -41,6 +27,11 @@ class TestClient(ClusterTestCase):
         n = len(self.client.ids)
         self.add_engines(2)
         self.assertEqual(len(self.client.ids), n+2)
+    
+    def test_iter(self):
+        self.minimum_engines(4)
+        engine_ids = [ view.targets for view in self.client ]
+        self.assertEqual(engine_ids, self.client.ids)
     
     def test_view_indexing(self):
         """test index access for views"""
@@ -152,11 +143,12 @@ class TestClient(ClusterTestCase):
         ar = c[t].apply_async(wait, 1)
         # give the monitor time to notice the message
         time.sleep(.25)
-        ahr = self.client.get_result(ar.msg_ids[0])
-        self.assertTrue(isinstance(ahr, AsyncHubResult))
+        ahr = self.client.get_result(ar.msg_ids[0], owner=False)
+        self.assertIsInstance(ahr, AsyncHubResult)
         self.assertEqual(ahr.get(), ar.get())
         ar2 = self.client.get_result(ar.msg_ids[0])
-        self.assertFalse(isinstance(ar2, AsyncHubResult))
+        self.assertNotIsInstance(ar2, AsyncHubResult)
+        self.assertEqual(ahr.get(), ar2.get())
         c.close()
     
     def test_get_execute_result(self):
@@ -171,11 +163,12 @@ class TestClient(ClusterTestCase):
         ar = c[t].execute("import time; time.sleep(1)", silent=False)
         # give the monitor time to notice the message
         time.sleep(.25)
-        ahr = self.client.get_result(ar.msg_ids[0])
-        self.assertTrue(isinstance(ahr, AsyncHubResult))
-        self.assertEqual(ahr.get().pyout, ar.get().pyout)
+        ahr = self.client.get_result(ar.msg_ids[0], owner=False)
+        self.assertIsInstance(ahr, AsyncHubResult)
+        self.assertEqual(ahr.get().execute_result, ar.get().execute_result)
         ar2 = self.client.get_result(ar.msg_ids[0])
-        self.assertFalse(isinstance(ar2, AsyncHubResult))
+        self.assertNotIsInstance(ar2, AsyncHubResult)
+        self.assertEqual(ahr.get(), ar2.get())
         c.close()
     
     def test_ids_list(self):
@@ -196,7 +189,12 @@ class TestClient(ClusterTestCase):
         self.assertTrue(isinstance(allqs, dict))
         intkeys = list(allqs.keys())
         intkeys.remove('unassigned')
-        self.assertEqual(sorted(intkeys), sorted(self.client.ids))
+        print("intkeys", intkeys)
+        intkeys = sorted(intkeys)
+        ids = self.client.ids
+        print("client.ids", ids)
+        ids = sorted(self.client.ids)
+        self.assertEqual(intkeys, ids)
         unassigned = allqs.pop('unassigned')
         for eid,qs in allqs.items():
             self.assertTrue(isinstance(qs, dict))
@@ -325,7 +323,7 @@ class TestClient(ClusterTestCase):
         # timeout 5s, polling every 100ms
         qs = rc.queue_status()
         for i in range(50):
-            if qs['unassigned'] or any(qs[eid]['tasks'] + qs[eid]['queue'] for eid in rc.ids):
+            if qs['unassigned'] or any(qs[eid]['tasks'] + qs[eid]['queue'] for eid in qs if eid != 'unassigned'):
                 time.sleep(0.1)
                 qs = rc.queue_status()
             else:
@@ -333,7 +331,7 @@ class TestClient(ClusterTestCase):
         
         # ensure Hub up to date:
         self.assertEqual(qs['unassigned'], 0)
-        for eid in rc.ids:
+        for eid in [ eid for eid in qs if eid != 'unassigned' ]:
             self.assertEqual(qs[eid]['tasks'], 0)
             self.assertEqual(qs[eid]['queue'], 0)
     
@@ -449,7 +447,33 @@ class TestClient(ClusterTestCase):
         self.client.purge_local_results(res[-1])
         self.assertEqual(len(self.client.results),before-len(res[-1]), msg="Not removed from results")
         self.assertEqual(len(self.client.metadata),before-len(res[-1]), msg="Not removed from metadata")
-        
+    
+    def test_purge_local_results_outstanding(self):
+        v = self.client[-1]
+        ar = v.apply_async(lambda : 1)
+        msg_id = ar.msg_ids[0]
+        ar.owner = False
+        ar.get()
+        self._wait_for_idle()
+        ar2 = v.apply_async(time.sleep, 1)
+        self.assertIn(msg_id, self.client.results)
+        self.assertIn(msg_id, self.client.metadata)
+        self.client.purge_local_results(ar)
+        self.assertNotIn(msg_id, self.client.results)
+        self.assertNotIn(msg_id, self.client.metadata)
+        with self.assertRaises(RuntimeError):
+            self.client.purge_local_results(ar2)
+        ar2.get()
+        self.client.purge_local_results(ar2)
+    
+    def test_purge_all_local_results_outstanding(self):
+        v = self.client[-1]
+        ar = v.apply_async(time.sleep, 1)
+        with self.assertRaises(RuntimeError):
+            self.client.purge_local_results('all')
+        ar.get()
+        self.client.purge_local_results('all')
+    
     def test_purge_all_hub_results(self):
         self.client.purge_hub_results('all')
         hist = self.client.hub_history()
@@ -493,19 +517,23 @@ class TestClient(ClusterTestCase):
     def test_spin_thread(self):
         self.client.spin_thread(0.01)
         ar = self.client[-1].apply_async(lambda : 1)
-        time.sleep(0.1)
-        self.assertTrue(ar.wall_time < 0.1,
-            "spin should have kept wall_time < 0.1, but got %f" % ar.wall_time
-        )
+        md = self.client.metadata[ar.msg_ids[0]]
+        # 3s timeout, 100ms poll
+        for i in range(30):
+            time.sleep(0.1)
+            if md['received'] is not None:
+                break
+        self.assertIsInstance(md['received'], datetime)
     
     def test_stop_spin_thread(self):
         self.client.spin_thread(0.01)
         self.client.stop_spin_thread()
         ar = self.client[-1].apply_async(lambda : 1)
-        time.sleep(0.15)
-        self.assertTrue(ar.wall_time > 0.1,
-            "Shouldn't be spinning, but got wall_time=%f" % ar.wall_time
-        )
+        md = self.client.metadata[ar.msg_ids[0]]
+        # 500ms timeout, 100ms poll
+        for i in range(5):
+            time.sleep(0.1)
+            self.assertIsNone(md['received'], None)
     
     def test_activate(self):
         ip = get_ipython()

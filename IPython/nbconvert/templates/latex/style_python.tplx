@@ -1,6 +1,6 @@
 ((= Python input/output style =))
 
-((*- extends 'latex_base.tplx' -*))
+((*- extends 'base.tplx' -*))
 
 % Custom definitions
 ((* block definitions *))
@@ -16,6 +16,6 @@
 
 ((* block input scoped *))
     \begin{Verbatim}[commandchars=\\\{\}]
-((( cell.input | highlight2latex(strip_verbatim=True) | add_prompts )))
+((( cell.input | highlight_code(strip_verbatim=True) | add_prompts )))
     \end{Verbatim}
 ((* endblock input *))

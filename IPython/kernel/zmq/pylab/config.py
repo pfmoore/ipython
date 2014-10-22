@@ -14,12 +14,24 @@ This module does not import anything from matplotlib.
 #-----------------------------------------------------------------------------
 
 from IPython.config.configurable import SingletonConfigurable
-from IPython.utils.traitlets import Dict, Instance, CaselessStrEnum, Bool
+from IPython.utils.traitlets import (
+    Dict, Instance, CaselessStrEnum, Set, Bool, Int, TraitError, Unicode
+)
 from IPython.utils.warn import warn
 
 #-----------------------------------------------------------------------------
 # Configurable for inline backend options
 #-----------------------------------------------------------------------------
+
+def pil_available():
+    """Test if PIL/Pillow is available"""
+    out = False
+    try:
+        from PIL import Image
+        out = True
+    except:
+        pass
+    return out
 
 # inherit from InlineBackendConfig for deprecation purposes
 class InlineBackendConfig(SingletonConfigurable):
@@ -39,8 +51,9 @@ class InlineBackend(InlineBackendConfig):
     # make that fit.
     rc = Dict({'figure.figsize': (6.0,4.0),
         # play nicely with white background in the Qt and notebook frontend
-        'figure.facecolor': 'white',
-        'figure.edgecolor': 'white',
+        'figure.facecolor': (1,1,1,0),
+        'figure.edgecolor': (1,1,1,0),
+        'axes.facecolor': (1,1,1,0),
         # 12pt labels get cutoff on 6x4 logplots, so use 10pt.
         'font.size': 10,
         # 72 dpi matches SVG/qtconsole
@@ -53,15 +66,35 @@ class InlineBackend(InlineBackendConfig):
         inline backend."""
     )
 
-    figure_format = CaselessStrEnum(['svg', 'png', 'retina'], default_value='png', config=True,
-        help="The image format for figures with the inline backend.")
+    figure_formats = Set({'png'}, config=True,
+                          help="""A set of figure formats to enable: 'png', 
+                          'retina', 'jpeg', 'svg', 'pdf'.""")
+
+    def _update_figure_formatters(self):
+        if self.shell is not None:
+            from IPython.core.pylabtools import select_figure_formats
+            select_figure_formats(self.shell, self.figure_formats, **self.print_figure_kwargs)
+    
+    def _figure_formats_changed(self, name, old, new):
+        if 'jpg' in new or 'jpeg' in new:
+            if not pil_available():
+                raise TraitError("Requires PIL/Pillow for JPG figures")
+        self._update_figure_formatters()
+
+    figure_format = Unicode(config=True, help="""The figure format to enable (deprecated
+                                         use `figure_formats` instead)""")
 
     def _figure_format_changed(self, name, old, new):
-        from IPython.core.pylabtools import select_figure_format
-        if self.shell is None:
-            return
-        else:
-            select_figure_format(self.shell, new)
+        if new:
+            self.figure_formats = {new}
+
+    print_figure_kwargs = Dict({'bbox_inches' : 'tight'}, config=True,
+        help="""Extra kwargs to be passed to fig.canvas.print_figure.
+        
+        Logical examples include: bbox_inches, quality (for jpeg figures), etc.
+        """
+    )
+    _print_figure_kwargs_changed = _update_figure_formatters
     
     close_figures = Bool(True, config=True,
         help="""Close all figures at the end of each cell.
@@ -79,7 +112,7 @@ class InlineBackend(InlineBackendConfig):
         other matplotlib backends, but figure barriers between cells must
         be explicit.
         """)
-
+    
     shell = Instance('IPython.core.interactiveshell.InteractiveShellABC')
 
 

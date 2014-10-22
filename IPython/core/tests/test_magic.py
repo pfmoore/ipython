@@ -12,7 +12,7 @@ from __future__ import absolute_import
 import io
 import os
 import sys
-from unittest import TestCase
+from unittest import TestCase, skipIf
 
 try:
     from importlib import invalidate_caches   # Required from Python 3.3
@@ -28,8 +28,6 @@ from IPython.core.magic import (Magics, magics_class, line_magic,
                                 register_line_magic, register_cell_magic,
                                 register_line_cell_magic)
 from IPython.core.magics import execution, script, code
-from IPython.nbformat.v3.tests.nbexamples import nb0
-from IPython.nbformat import current
 from IPython.testing import decorators as dec
 from IPython.testing import tools as tt
 from IPython.utils import py3compat
@@ -236,6 +234,16 @@ def doctest_hist_op():
     >>> 
     """
 
+def test_hist_pof():
+    ip = get_ipython()
+    ip.run_cell(u"1+2", store_history=True)
+    #raise Exception(ip.history_manager.session_number)
+    #raise Exception(list(ip.history_manager._get_range_session()))
+    with TemporaryDirectory() as td:
+        tf = os.path.join(td, 'hist.py')
+        ip.run_line_magic('history', '-pof %s' % tf)
+        assert os.path.isfile(tf)
+
 
 @dec.skip_without('sqlite3')
 def test_macro():
@@ -372,6 +380,18 @@ def test_time3():
         ip.run_cell("%%time\n"
                     "run = 0\n"
                     "run += 1")
+
+@dec.skipif(sys.version_info[0] >= 3, "no differences with __future__ in py3")
+def test_time_futures():
+    "Test %time with __future__ environments"
+    ip = get_ipython()
+    ip.autocall = 0
+    ip.run_cell("from __future__ import division")
+    with tt.AssertPrints('0.25'):
+        ip.run_line_magic('time', 'print(1/4)')
+    ip.compile.reset_compiler_flags()
+    with tt.AssertNotPrints('0.25'):
+        ip.run_line_magic('time', 'print(1/4)')
 
 def test_doctest_mode():
     "Toggle doctest_mode twice, it should be a no-op and run without error"
@@ -552,6 +572,17 @@ def test_timeit_quiet():
     with tt.AssertNotPrints("loops"):
         _ip.run_cell("%timeit -n1 -r1 -q 1")
 
+@dec.skipif(sys.version_info[0] >= 3, "no differences with __future__ in py3")
+def test_timeit_futures():
+    "Test %timeit with __future__ environments"
+    ip = get_ipython()
+    ip.run_cell("from __future__ import division")
+    with tt.AssertPrints('0.25'):
+        ip.run_line_magic('timeit', '-n1 -r1 print(1/4)')
+    ip.compile.reset_compiler_flags()
+    with tt.AssertNotPrints('0.25'):
+        ip.run_line_magic('timeit', '-n1 -r1 print(1/4)')
+
 @dec.skipif(execution.profile is None)
 def test_prun_special_syntax():
     "Test %%prun with IPython special syntax"
@@ -590,37 +621,46 @@ def test_extension():
     finally:
         _ip.ipython_dir = orig_ipython_dir
         tmpdir.cleanup()
-        
-def test_notebook_export_json():
-    with TemporaryDirectory() as td:
-        outfile = os.path.join(td, "nb.ipynb")
-        _ip.ex(py3compat.u_format(u"u = {u}'héllo'"))
-        _ip.magic("notebook -e %s" % outfile)
 
-def test_notebook_export_py():
-    with TemporaryDirectory() as td:
-        outfile = os.path.join(td, "nb.py")
-        _ip.ex(py3compat.u_format(u"u = {u}'héllo'"))
-        _ip.magic("notebook -e %s" % outfile)
 
-def test_notebook_reformat_py():
-    with TemporaryDirectory() as td:
-        infile = os.path.join(td, "nb.ipynb")
-        with io.open(infile, 'w', encoding='utf-8') as f:
-            current.write(nb0, f, 'json')
-            
-        _ip.ex(py3compat.u_format(u"u = {u}'héllo'"))
-        _ip.magic("notebook -f py %s" % infile)
+# The nose skip decorator doesn't work on classes, so this uses unittest's skipIf
+@skipIf(dec.module_not_available('IPython.nbformat.current'), 'nbformat not importable')
+class NotebookExportMagicTests(TestCase):
+    def test_notebook_export_json(self):
+        with TemporaryDirectory() as td:
+            outfile = os.path.join(td, "nb.ipynb")
+            _ip.ex(py3compat.u_format(u"u = {u}'héllo'"))
+            _ip.magic("notebook -e %s" % outfile)
 
-def test_notebook_reformat_json():
-    with TemporaryDirectory() as td:
-        infile = os.path.join(td, "nb.py")
-        with io.open(infile, 'w', encoding='utf-8') as f:
-            current.write(nb0, f, 'py')
-            
-        _ip.ex(py3compat.u_format(u"u = {u}'héllo'"))
-        _ip.magic("notebook -f ipynb %s" % infile)
-        _ip.magic("notebook -f json %s" % infile)
+    def test_notebook_export_py(self):
+        with TemporaryDirectory() as td:
+            outfile = os.path.join(td, "nb.py")
+            _ip.ex(py3compat.u_format(u"u = {u}'héllo'"))
+            _ip.magic("notebook -e %s" % outfile)
+
+    def test_notebook_reformat_py(self):
+        from IPython.nbformat.v3.tests.nbexamples import nb0
+        from IPython.nbformat import current
+        with TemporaryDirectory() as td:
+            infile = os.path.join(td, "nb.ipynb")
+            with io.open(infile, 'w', encoding='utf-8') as f:
+                current.write(nb0, f, 'json')
+
+            _ip.ex(py3compat.u_format(u"u = {u}'héllo'"))
+            _ip.magic("notebook -f py %s" % infile)
+
+    def test_notebook_reformat_json(self):
+        from IPython.nbformat.v3.tests.nbexamples import nb0
+        from IPython.nbformat import current
+        with TemporaryDirectory() as td:
+            infile = os.path.join(td, "nb.py")
+            with io.open(infile, 'w', encoding='utf-8') as f:
+                current.write(nb0, f, 'py')
+
+            _ip.ex(py3compat.u_format(u"u = {u}'héllo'"))
+            _ip.magic("notebook -f ipynb %s" % infile)
+            _ip.magic("notebook -f json %s" % infile)
+
 
 def test_env():
     env = _ip.magic("env")
@@ -911,7 +951,7 @@ def _run_edit_test(arg_s, exp_filename=None,
     if exp_filename is not None:
         nt.assert_equal(exp_filename, filename)
     if exp_contents is not None:
-        with io.open(filename, 'r') as f:
+        with io.open(filename, 'r', encoding='utf-8') as f:
             contents = f.read()
         nt.assert_equal(exp_contents, contents)
     if exp_lineno != -1:
@@ -942,3 +982,10 @@ def test_edit_cell():
     
     # test
     _run_edit_test("1", exp_contents=ip.user_ns['In'][1], exp_is_temp=True)
+
+def test_bookmark():
+    ip = get_ipython()
+    ip.run_line_magic('bookmark', 'bmname')
+    with tt.AssertPrints('bmname'):
+        ip.run_line_magic('bookmark', '-l')
+    ip.run_line_magic('bookmark', '-d bmname')

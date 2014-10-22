@@ -1,27 +1,15 @@
 # -*- coding: utf-8 -*-
-"""test View objects
+"""test View objects"""
 
-Authors:
-
-* Min RK
-"""
-#-------------------------------------------------------------------------------
-#  Copyright (C) 2011  The IPython Development Team
-#
-#  Distributed under the terms of the BSD License.  The full license is in
-#  the file COPYING, distributed as part of this software.
-#-------------------------------------------------------------------------------
-
-#-------------------------------------------------------------------------------
-# Imports
-#-------------------------------------------------------------------------------
+# Copyright (c) IPython Development Team.
+# Distributed under the terms of the Modified BSD License.
 
 import base64
 import sys
 import platform
 import time
 from collections import namedtuple
-from tempfile import mktemp
+from tempfile import NamedTemporaryFile
 
 import zmq
 from nose.plugins.attrib import attr
@@ -154,23 +142,23 @@ class TestView(ClusterTestCase):
         ar = v.apply_async(wait, 1)
         # give the monitor time to notice the message
         time.sleep(.25)
-        ahr = v2.get_result(ar.msg_ids[0])
-        self.assertTrue(isinstance(ahr, AsyncHubResult))
+        ahr = v2.get_result(ar.msg_ids[0], owner=False)
+        self.assertIsInstance(ahr, AsyncHubResult)
         self.assertEqual(ahr.get(), ar.get())
         ar2 = v2.get_result(ar.msg_ids[0])
-        self.assertFalse(isinstance(ar2, AsyncHubResult))
+        self.assertNotIsInstance(ar2, AsyncHubResult)
+        self.assertEqual(ahr.get(), ar2.get())
         c.spin()
         c.close()
     
     def test_run_newline(self):
         """test that run appends newline to files"""
-        tmpfile = mktemp()
-        with open(tmpfile, 'w') as f:
+        with NamedTemporaryFile('w', delete=False) as f:
             f.write("""def g():
                 return 5
                 """)
         v = self.client[-1]
-        v.run(tmpfile, block=True)
+        v.run(f.name, block=True)
         self.assertEqual(v.apply_sync(lambda f: f(), pmod.Reference('g')), 5)
 
     def test_apply_tracked(self):
@@ -287,6 +275,21 @@ class TestView(ClusterTestCase):
             assert_array_equal(B,C)
     
     @skip_without('numpy')
+    def test_apply_numpy_object_dtype(self):
+        """view.apply(f, ndarray) with dtype=object"""
+        import numpy
+        from numpy.testing.utils import assert_array_equal
+        view = self.client[-1]
+        
+        A = numpy.array([dict(a=5)])
+        B = view.apply_sync(lambda x:x, A)
+        assert_array_equal(A,B)
+        
+        A = numpy.array([(0, dict(b=10))], dtype=[('i', int), ('o', object)])
+        B = view.apply_sync(lambda x:x, A)
+        assert_array_equal(A,B)
+    
+    @skip_without('numpy')
     def test_push_pull_recarray(self):
         """push/pull recarrays"""
         import numpy
@@ -332,6 +335,11 @@ class TestView(ClusterTestCase):
         data = list(range(16))
         r = view.map_sync(f, data)
         self.assertEqual(r, list(map(f, data)))
+    
+    def test_map_empty_sequence(self):
+        view = self.client[:]
+        r = view.map_sync(lambda x: x, [])
+        self.assertEqual(r, [])
     
     def test_map_iterable(self):
         """test map on iterables (direct)"""
@@ -530,7 +538,7 @@ class TestView(ClusterTestCase):
         ar = e0.execute("5", silent=False)
         er = ar.get()
         self.assertEqual(str(er), "<ExecuteReply[%i]: 5>" % er.execution_count)
-        self.assertEqual(er.pyout['data']['text/plain'], '5')
+        self.assertEqual(er.execute_result['data']['text/plain'], '5')
 
     def test_execute_reply_rich(self):
         e0 = self.client[self.client.ids[0]]
@@ -551,21 +559,21 @@ class TestView(ClusterTestCase):
         er = ar.get()
         self.assertEqual(er.stdout.strip(), '5')
         
-    def test_execute_pyout(self):
-        """execute triggers pyout with silent=False"""
+    def test_execute_result(self):
+        """execute triggers execute_result with silent=False"""
         view = self.client[:]
         ar = view.execute("5", silent=False, block=True)
         
         expected = [{'text/plain' : '5'}] * len(view)
-        mimes = [ out['data'] for out in ar.pyout ]
+        mimes = [ out['data'] for out in ar.execute_result ]
         self.assertEqual(mimes, expected)
     
     def test_execute_silent(self):
-        """execute does not trigger pyout with silent=True"""
+        """execute does not trigger execute_result with silent=True"""
         view = self.client[:]
         ar = view.execute("5", block=True)
         expected = [None] * len(view)
-        self.assertEqual(ar.pyout, expected)
+        self.assertEqual(ar.execute_result, expected)
     
     def test_execute_magic(self):
         """execute accepts IPython commands"""

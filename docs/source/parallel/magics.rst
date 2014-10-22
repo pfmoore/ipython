@@ -7,13 +7,14 @@ Parallel Magic Commands
 We provide a few IPython magic commands
 that make it a bit more pleasant to execute Python commands on the engines interactively.
 These are mainly shortcuts to :meth:`.DirectView.execute`
-and :meth:`.AsyncResult.display_outputs` methods repsectively.
+and :meth:`.AsyncResult.display_outputs` methods respectively.
 
 These magics will automatically become available when you create a Client:
 
 .. sourcecode:: ipython
 
-    In [2]: rc = parallel.Client()
+    In [1]: from IPython.parallel import Client
+    In [2]: rc = Client()
 
 The initially active View will have attributes ``targets='all', block=True``,
 which is a blocking view of all engines, evaluated at request time
@@ -70,7 +71,7 @@ Since engines are IPython as well, you can even run magics remotely:
 
 And once in pylab mode with the inline backend,
 you can make plots and they will be displayed in your frontend
-if it suports the inline figures (e.g. notebook or qtconsole):
+if it supports the inline figures (e.g. notebook or qtconsole):
 
 .. sourcecode:: ipython
 

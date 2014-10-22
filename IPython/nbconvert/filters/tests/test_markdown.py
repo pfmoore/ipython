@@ -1,19 +1,7 @@
+"""Tests for conversions from markdown to other formats"""
 
-"""
-Module with tests for Markdown
-"""
-
-#-----------------------------------------------------------------------------
-# Copyright (c) 2013, the IPython Development Team.
-#
+# Copyright (c) IPython Development Team.
 # Distributed under the terms of the Modified BSD License.
-#
-# The full license is in the file COPYING.txt, distributed with this software.
-#-----------------------------------------------------------------------------
-
-#-----------------------------------------------------------------------------
-# Imports
-#-----------------------------------------------------------------------------
 
 from copy import copy
 
@@ -23,10 +11,7 @@ from IPython.testing import decorators as dec
 from ...tests.base import TestsBase
 from ..markdown import markdown2latex, markdown2html, markdown2rst
 
-
-#-----------------------------------------------------------------------------
-# Class
-#-----------------------------------------------------------------------------
+from jinja2 import Environment
 
 class TestMarkdown(TestsBase):
 
@@ -63,13 +48,50 @@ class TestMarkdown(TestsBase):
         for index, test in enumerate(self.tests):
             self._try_markdown(markdown2latex, test, self.tokens[index])
 
-
     @dec.onlyif_cmds_exist('pandoc')
+    def test_pandoc_extra_args(self):
+        # pass --no-wrap
+        s = '\n'.join([
+            "#latex {{long_line | md2l(['--no-wrap'])}}",
+            "#rst {{long_line | md2r(['--columns', '5'])}}",
+        ])
+        long_line = ' '.join(['long'] * 30)
+        env = Environment()
+        env.filters.update({
+            'md2l': markdown2latex,
+            'md2r': markdown2rst,
+        })
+        tpl = env.from_string(s)
+        rendered = tpl.render(long_line=long_line)
+        _, latex, rst = rendered.split('#')
+        
+        self.assertEqual(latex.strip(), 'latex %s' % long_line)
+        self.assertEqual(rst.strip(), 'rst %s' % long_line.replace(' ', '\n'))
+
     def test_markdown2html(self):
         """markdown2html test"""
         for index, test in enumerate(self.tests):
             self._try_markdown(markdown2html, test, self.tokens[index])
 
+    def test_markdown2html_math(self):
+        # Mathematical expressions should be passed through unaltered
+        cases = [("\\begin{equation*}\n"
+                  "\\left( \\sum_{k=1}^n a_k b_k \\right)^2 \\leq \\left( \\sum_{k=1}^n a_k^2 \\right) \\left( \\sum_{k=1}^n b_k^2 \\right)\n"
+                  "\\end{equation*}"),
+                 ("$$\n"
+                  "a = 1 *3* 5\n"
+                  "$$"),
+                  "$ a = 1 *3* 5 $",
+                ]
+        for case in cases:
+            self.assertIn(case, markdown2html(case))
+
+    def test_markdown2html_math_paragraph(self):
+        # https://github.com/ipython/ipython/issues/6724
+        a = """Water that is stored in $t$, $s_t$, must equal the storage content of the previous stage,
+$s_{t-1}$, plus a stochastic inflow, $I_t$, minus what is being released in $t$, $r_t$.
+With $s_0$ defined as the initial storage content in $t=1$, we have"""
+        self.assertIn(a, markdown2html(a))
 
     @dec.onlyif_cmds_exist('pandoc')
     def test_markdown2rst(self):

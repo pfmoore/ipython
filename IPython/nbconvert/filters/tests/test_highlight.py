@@ -15,12 +15,17 @@ Module with tests for Highlight
 #-----------------------------------------------------------------------------
 
 from ...tests.base import TestsBase
-from ..highlight import highlight2html, highlight2latex
-
+from ..highlight import Highlight2HTML, Highlight2Latex
+from IPython.config import Config
+import xml
 
 #-----------------------------------------------------------------------------
 # Class
 #-----------------------------------------------------------------------------
+
+highlight2html = Highlight2HTML()
+highlight2latex = Highlight2Latex()
+highlight2html_ruby = Highlight2HTML(pygments_lexer='ruby')
 
 class TestHighlight(TestsBase):
     """Contains test functions for highlight.py"""
@@ -30,8 +35,12 @@ class TestHighlight(TestsBase):
         """
         #Hello World Example
 
+        import foo
+
         def say(text):
-            print(text)
+            foo.bar(text)
+
+        end
 
         say('Hello World!')
         """,
@@ -42,7 +51,7 @@ class TestHighlight(TestsBase):
         ]   
 
     tokens = [
-        ['Hello World Example', 'say', 'text', 'print', 'def'],
+        ['Hello World Example', 'say', 'text', 'import', 'def'],
         ['pylab', 'plot']]
 
 
@@ -57,6 +66,22 @@ class TestHighlight(TestsBase):
         for index, test in enumerate(self.tests):
             self._try_highlight(highlight2latex, test, self.tokens[index])
 
+    def test_parse_html_many_lang(self):
+
+        ht =  highlight2html(self.tests[0])
+        rb =  highlight2html_ruby(self.tests[0])
+
+        for lang,tkns in [
+                ( ht, ('def', )),
+                ( rb, ('def','end'  ) )
+                ]:
+            print(tkns)
+            print(lang)
+            root = xml.etree.ElementTree.fromstring(lang)
+            self.assertEqual(self._extract_tokens(root,'k'), set(tkns))
+
+    def _extract_tokens(self, root, cls):
+        return set(map(lambda x:x.text,root.findall(".//*[@class='"+cls+"']")))
 
     def _try_highlight(self, method, test, tokens):
         """Try highlighting source, look for key tokens"""

@@ -110,10 +110,10 @@ class SList(list):
 
     These are normal lists, but with the special attributes:
 
-        .l (or .list) : value as list (the list itself).
-        .n (or .nlstr): value as a string, joined on newlines.
-        .s (or .spstr): value as a string, joined on spaces.
-        .p (or .paths): list of path objects
+    * .l (or .list) : value as list (the list itself).
+    * .n (or .nlstr): value as a string, joined on newlines.
+    * .s (or .spstr): value as a string, joined on spaces.
+    * .p (or .paths): list of path objects
 
     Any values which require transformations are computed only once and
     cached."""
@@ -191,13 +191,14 @@ class SList(list):
         Allows quick awk-like usage of string lists.
 
         Example data (in var a, created by 'a = !ls -l')::
+
             -rwxrwxrwx  1 ville None      18 Dec 14  2006 ChangeLog
             drwxrwxrwx+ 6 ville None       0 Oct 24 18:05 IPython
 
-        a.fields(0) is ['-rwxrwxrwx', 'drwxrwxrwx+']
-        a.fields(1,0) is ['1 -rwxrwxrwx', '6 drwxrwxrwx+']
-        (note the joining by space).
-        a.fields(-1) is ['ChangeLog', 'IPython']
+        * ``a.fields(0)`` is ``['-rwxrwxrwx', 'drwxrwxrwx+']``
+        * ``a.fields(1,0)`` is ``['1 -rwxrwxrwx', '6 drwxrwxrwx+']``
+          (note the joining by space).
+        * ``a.fields(-1)`` is ``['ChangeLog', 'IPython']``
 
         IndexErrors are ignored.
 
@@ -224,6 +225,7 @@ class SList(list):
         """ sort by specified fields (see fields())
 
         Example::
+
             a.sort(1, nums = True)
 
         Sorts a by second field, in numerical order (so that 21 > 3)
@@ -308,7 +310,9 @@ def list_strings(arg):
     """Always return a list of strings, given a string or list of strings
     as input.
 
-    :Examples:
+    Examples
+    --------
+    ::
 
         In [7]: list_strings('A single string')
         Out[7]: ['A single string']
@@ -327,7 +331,9 @@ def list_strings(arg):
 def marquee(txt='',width=78,mark='*'):
     """Return the input string centered in a 'marquee'.
 
-    :Examples:
+    Examples
+    --------
+    ::
 
         In [16]: marquee('A test',40)
         Out[16]: '**************** A test ****************'
@@ -485,6 +491,17 @@ def strip_email_quotes(text):
             text = '\n'.join([ ln[strip:] for ln in lines])
     return text
 
+def strip_ansi(source):
+    """
+    Remove ansi escape codes from text.
+    
+    Parameters
+    ----------
+    source : str
+        Source to remove the ansi from
+    """
+    return re.sub(r'\033\[(\d|;)+?m', '', source)
+
 
 class EvalFormatter(Formatter):
     """A String Formatter that allows evaluation of simple expressions.
@@ -498,18 +515,22 @@ class EvalFormatter(Formatter):
 
     Examples
     --------
-    
-    In  [1]: f = EvalFormatter()
-    In  [2]: f.format('{n//4}', n=8)
-    Out [2]: '2'
-    
-    In  [3]: f.format("{greeting[slice(2,4)]}", greeting="Hello")
-    Out [3]: 'll'
+    ::
+
+        In [1]: f = EvalFormatter()
+        In [2]: f.format('{n//4}', n=8)
+        Out[2]: '2'
+
+        In [3]: f.format("{greeting[slice(2,4)]}", greeting="Hello")
+        Out[3]: 'll'
     """
     def get_field(self, name, args, kwargs):
         v = eval(name, kwargs)
         return v, name
 
+#XXX: As of Python 3.4, the format string parsing no longer splits on a colon
+# inside [], so EvalFormatter can handle slicing. Once we only support 3.4 and
+# above, it should be possible to remove FullEvalFormatter.
 
 @skip_doctest_py3
 class FullEvalFormatter(Formatter):
@@ -523,16 +544,17 @@ class FullEvalFormatter(Formatter):
     
     Examples
     --------
-    
-    In [1]: f = FullEvalFormatter()
-    In [2]: f.format('{n//4}', n=8)
-    Out[2]: u'2'
-    
-    In [3]: f.format('{list(range(5))[2:4]}')
-    Out[3]: u'[2, 3]'
+    ::
 
-    In [4]: f.format('{3*2}')
-    Out[4]: u'6'
+        In [1]: f = FullEvalFormatter()
+        In [2]: f.format('{n//4}', n=8)
+        Out[2]: u'2'
+
+        In [3]: f.format('{list(range(5))[2:4]}')
+        Out[3]: u'[2, 3]'
+
+        In [4]: f.format('{3*2}')
+        Out[4]: u'6'
     """
     # copied from Formatter._vformat with minor changes to allow eval
     # and replace the format_spec code with slicing
@@ -577,15 +599,17 @@ class DollarFormatter(FullEvalFormatter):
 
     Examples
     --------
-    In [1]: f = DollarFormatter()
-    In [2]: f.format('{n//4}', n=8)
-    Out[2]: u'2'
-    
-    In [3]: f.format('23 * 76 is $result', result=23*76)
-    Out[3]: u'23 * 76 is 1748'
-    
-    In [4]: f.format('$a or {b}', a=1, b=2)
-    Out[4]: u'1 or 2'
+    ::
+
+        In [1]: f = DollarFormatter()
+        In [2]: f.format('{n//4}', n=8)
+        Out[2]: u'2'
+
+        In [3]: f.format('23 * 76 is $result', result=23*76)
+        Out[3]: u'23 * 76 is 1748'
+
+        In [4]: f.format('$a or {b}', a=1, b=2)
+        Out[4]: u'1 or 2'
     """
     _dollar_pattern = re.compile("(.*?)\$(\$?[\w\.]+)")
     def parse(self, fmt_string):
@@ -648,7 +672,7 @@ def compute_item_matrix(items, empty=None, *args, **kwargs) :
     Parameters
     ----------
 
-    items :
+    items
         list of strings to columize
     empty : (default None)
         default value to fill list if needed
@@ -660,39 +684,41 @@ def compute_item_matrix(items, empty=None, *args, **kwargs) :
     Returns
     -------
 
-    Returns a tuple of (strings_matrix, dict_info)
-
-    strings_matrix :
+    strings_matrix
 
         nested list of string, the outer most list contains as many list as
         rows, the innermost lists have each as many element as colums. If the
         total number of elements in `items` does not equal the product of
         rows*columns, the last element of some lists are filled with `None`.
 
-    dict_info :
+    dict_info
         some info to make columnize easier:
 
-        columns_numbers : number of columns
-        rows_numbers    : number of rows
-        columns_width   : list of with of each columns
-        optimal_separator_width : best separator width between columns
+        columns_numbers
+          number of columns
+        rows_numbers
+          number of rows
+        columns_width
+          list of with of each columns
+        optimal_separator_width
+          best separator width between columns
 
     Examples
     --------
+    ::
 
-    In [1]: l = ['aaa','b','cc','d','eeeee','f','g','h','i','j','k','l']
-       ...: compute_item_matrix(l,displaywidth=12)
-    Out[1]:
-        ([['aaa', 'f', 'k'],
-        ['b', 'g', 'l'],
-        ['cc', 'h', None],
-        ['d', 'i', None],
-        ['eeeee', 'j', None]],
-        {'columns_numbers': 3,
-        'columns_width': [5, 1, 1],
-        'optimal_separator_width': 2,
-        'rows_numbers': 5})
-
+        In [1]: l = ['aaa','b','cc','d','eeeee','f','g','h','i','j','k','l']
+           ...: compute_item_matrix(l,displaywidth=12)
+        Out[1]:
+            ([['aaa', 'f', 'k'],
+            ['b', 'g', 'l'],
+            ['cc', 'h', None],
+            ['d', 'i', None],
+            ['eeeee', 'j', None]],
+            {'columns_numbers': 3,
+            'columns_width': [5, 1, 1],
+            'optimal_separator_width': 2,
+            'rows_numbers': 5})
     """
     info = _find_optimal(list(map(len, items)), *args, **kwargs)
     nrow, ncol = info['rows_numbers'], info['columns_numbers']

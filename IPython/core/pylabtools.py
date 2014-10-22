@@ -1,39 +1,27 @@
 # -*- coding: utf-8 -*-
-"""Pylab (matplotlib) support utilities.
-
-Authors
--------
-
-* Fernando Perez.
-* Brian Granger
-"""
+"""Pylab (matplotlib) support utilities."""
 from __future__ import print_function
 
-#-----------------------------------------------------------------------------
-#  Copyright (C) 2009  The IPython Development Team
-#
-#  Distributed under the terms of the BSD License.  The full license is in
-#  the file COPYING, distributed as part of this software.
-#-----------------------------------------------------------------------------
+# Copyright (c) IPython Development Team.
+# Distributed under the terms of the Modified BSD License.
 
-#-----------------------------------------------------------------------------
-# Imports
-#-----------------------------------------------------------------------------
-
-import sys
 from io import BytesIO
 
 from IPython.core.display import _pngxy
 from IPython.utils.decorators import flag_calls
+from IPython.utils import py3compat
 
 # If user specifies a GUI, that dictates the backend, otherwise we read the
 # user's mpl default from the mpl rc structure
 backends = {'tk': 'TkAgg',
             'gtk': 'GTKAgg',
+            'gtk3': 'GTK3Agg',
             'wx': 'WXAgg',
             'qt': 'Qt4Agg', # qt3 not supported
             'qt4': 'Qt4Agg',
+            'qt5': 'Qt5Agg',
             'osx': 'MacOSX',
+            'nbagg': 'nbAgg',
             'inline' : 'module://IPython.kernel.zmq.pylab.backend_inline'}
 
 # We also need a reverse backends2guis mapping that will properly choose which
@@ -46,6 +34,7 @@ backend2gui['Qt4Agg'] = 'qt'
 # In the reverse mapping, there are a few extra valid matplotlib backends that
 # map to the same GUI support
 backend2gui['GTK'] = backend2gui['GTKCairo'] = 'gtk'
+backend2gui['GTK3Cairo'] = 'gtk3'
 backend2gui['WX'] = 'wx'
 backend2gui['CocoaAgg'] = 'osx'
 
@@ -92,29 +81,47 @@ def figsize(sizex, sizey):
     matplotlib.rcParams['figure.figsize'] = [sizex, sizey]
 
 
-def print_figure(fig, fmt='png'):
-    """Convert a figure to svg or png for inline display."""
+def print_figure(fig, fmt='png', bbox_inches='tight', **kwargs):
+    """Print a figure to an image, and return the resulting file data
+    
+    Returned data will be bytes unless ``fmt='svg'``,
+    in which case it will be unicode.
+    
+    Any keyword args are passed to fig.canvas.print_figure,
+    such as ``quality`` or ``bbox_inches``.
+    """
     from matplotlib import rcParams
     # When there's an empty figure, we shouldn't return anything, otherwise we
     # get big blank areas in the qt console.
     if not fig.axes and not fig.lines:
         return
 
-    fc = fig.get_facecolor()
-    ec = fig.get_edgecolor()
-    bytes_io = BytesIO()
     dpi = rcParams['savefig.dpi']
     if fmt == 'retina':
         dpi = dpi * 2
         fmt = 'png'
-    fig.canvas.print_figure(bytes_io, format=fmt, bbox_inches='tight',
-                            facecolor=fc, edgecolor=ec, dpi=dpi)
+    
+    # build keyword args
+    kw = dict(
+        format=fmt,
+        facecolor=fig.get_facecolor(),
+        edgecolor=fig.get_edgecolor(),
+        dpi=dpi,
+        bbox_inches=bbox_inches,
+    )
+    # **kwargs get higher priority
+    kw.update(kwargs)
+    
+    bytes_io = BytesIO()
+    fig.canvas.print_figure(bytes_io, **kw)
     data = bytes_io.getvalue()
+    if fmt == 'svg':
+        data = data.decode('utf-8')
     return data
     
-def retina_figure(fig):
+def retina_figure(fig, **kwargs):
     """format a figure as a pixel-doubled (retina) PNG"""
-    pngdata = print_figure(fig, fmt='retina')
+    pngdata = print_figure(fig, fmt='retina', **kwargs)
     w, h = _pngxy(pngdata)
     metadata = dict(width=w//2, height=h//2)
     return pngdata, metadata
@@ -161,31 +168,50 @@ def mpl_runner(safe_execfile):
     return mpl_execfile
 
 
-def select_figure_format(shell, fmt):
-    """Select figure format for inline backend, can be 'png', 'retina', or 'svg'.
+def select_figure_formats(shell, formats, **kwargs):
+    """Select figure formats for the inline backend.
 
-    Using this method ensures only one figure format is active at a time.
+    Parameters
+    ==========
+    shell : InteractiveShell
+        The main IPython instance.
+    formats : str or set
+        One or a set of figure formats to enable: 'png', 'retina', 'jpeg', 'svg', 'pdf'.
+    **kwargs : any
+        Extra keyword arguments to be passed to fig.canvas.print_figure.
     """
     from matplotlib.figure import Figure
     from IPython.kernel.zmq.pylab import backend_inline
 
     svg_formatter = shell.display_formatter.formatters['image/svg+xml']
     png_formatter = shell.display_formatter.formatters['image/png']
+    jpg_formatter = shell.display_formatter.formatters['image/jpeg']
+    pdf_formatter = shell.display_formatter.formatters['application/pdf']
 
-    if fmt == 'png':
-        svg_formatter.type_printers.pop(Figure, None)
-        png_formatter.for_type(Figure, lambda fig: print_figure(fig, 'png'))
-    elif fmt in ('png2x', 'retina'):
-        svg_formatter.type_printers.pop(Figure, None)
-        png_formatter.for_type(Figure, retina_figure)
-    elif fmt == 'svg':
-        png_formatter.type_printers.pop(Figure, None)
-        svg_formatter.for_type(Figure, lambda fig: print_figure(fig, 'svg'))
-    else:
-        raise ValueError("supported formats are: 'png', 'retina', 'svg', not %r" % fmt)
+    if isinstance(formats, py3compat.string_types):
+        formats = {formats}
+    # cast in case of list / tuple
+    formats = set(formats)
 
-    # set the format to be used in the backend()
-    backend_inline._figure_format = fmt
+    [ f.pop(Figure, None) for f in shell.display_formatter.formatters.values() ]
+    
+    supported = {'png', 'png2x', 'retina', 'jpg', 'jpeg', 'svg', 'pdf'}
+    bad = formats.difference(supported)
+    if bad:
+        bs = "%s" % ','.join([repr(f) for f in bad])
+        gs = "%s" % ','.join([repr(f) for f in supported])
+        raise ValueError("supported formats are: %s not %s" % (gs, bs))
+    
+    if 'png' in formats:
+        png_formatter.for_type(Figure, lambda fig: print_figure(fig, 'png', **kwargs))
+    if 'retina' in formats or 'png2x' in formats:
+        png_formatter.for_type(Figure, lambda fig: retina_figure(fig, **kwargs))
+    if 'jpg' in formats or 'jpeg' in formats:
+        jpg_formatter.for_type(Figure, lambda fig: print_figure(fig, 'jpg', **kwargs))
+    if 'svg' in formats:
+        svg_formatter.for_type(Figure, lambda fig: print_figure(fig, 'svg', **kwargs))
+    if 'pdf' in formats:
+        pdf_formatter.for_type(Figure, lambda fig: print_figure(fig, 'pdf', **kwargs))
 
 #-----------------------------------------------------------------------------
 # Code for initializing matplotlib and importing pylab
@@ -319,7 +345,7 @@ def configure_inline_support(shell, backend):
 
     if backend == backends['inline']:
         from IPython.kernel.zmq.pylab.backend_inline import flush_figures
-        shell.register_post_execute(flush_figures)
+        shell.events.register('post_execute', flush_figures)
 
         # Save rcParams that will be overwrittern
         shell._saved_rcParams = dict()
@@ -329,12 +355,14 @@ def configure_inline_support(shell, backend):
         pyplot.rcParams.update(cfg.rc)
     else:
         from IPython.kernel.zmq.pylab.backend_inline import flush_figures
-        if flush_figures in shell._post_execute:
-            shell._post_execute.pop(flush_figures)
+        try:
+            shell.events.unregister('post_execute', flush_figures)
+        except ValueError:
+            pass
         if hasattr(shell, '_saved_rcParams'):
             pyplot.rcParams.update(shell._saved_rcParams)
             del shell._saved_rcParams
 
     # Setup the default figure format
-    select_figure_format(shell, cfg.figure_format)
+    select_figure_formats(shell, cfg.figure_formats, **cfg.print_figure_kwargs)
 

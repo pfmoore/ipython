@@ -14,19 +14,11 @@ itself from the command line. There are two ways of running this script:
 
 """
 
-#-----------------------------------------------------------------------------
-#  Copyright (C) 2009-2011  The IPython Development Team
-#
-#  Distributed under the terms of the BSD License.  The full license is in
-#  the file COPYING, distributed as part of this software.
-#-----------------------------------------------------------------------------
+# Copyright (c) IPython Development Team.
+# Distributed under the terms of the Modified BSD License.
 
-#-----------------------------------------------------------------------------
-# Imports
-#-----------------------------------------------------------------------------
 from __future__ import print_function
 
-# Stdlib
 import glob
 from io import BytesIO
 import os
@@ -35,7 +27,6 @@ import sys
 from threading import Thread, Lock, Event
 import warnings
 
-# Now, proceed to import nose itself
 import nose.plugins.builtin
 from nose.plugins.xunit import Xunit
 from nose import SkipTest
@@ -43,7 +34,6 @@ from nose.core import TestProgram
 from nose.plugins import Plugin
 from nose.util import safe_str
 
-# Our own imports
 from IPython.utils.process import is_cmd_found
 from IPython.utils.importstring import import_item
 from IPython.testing.plugin.ipdoctest import IPythonDoctest
@@ -140,18 +130,16 @@ have['pexpect'] = test_for('IPython.external.pexpect')
 have['pymongo'] = test_for('pymongo')
 have['pygments'] = test_for('pygments')
 have['qt'] = test_for('IPython.external.qt')
-have['rpy2'] = test_for('rpy2')
 have['sqlite3'] = test_for('sqlite3')
-have['cython'] = test_for('Cython')
-have['oct2py'] = test_for('oct2py')
 have['tornado'] = test_for('tornado.version_info', (3,1,0), callback=None)
 have['jinja2'] = test_for('jinja2')
-have['wx'] = test_for('wx')
-have['wx.aui'] = test_for('wx.aui')
-have['azure'] = test_for('azure')
+have['mistune'] = test_for('mistune')
 have['requests'] = test_for('requests')
 have['sphinx'] = test_for('sphinx')
+have['jsonschema'] = test_for('jsonschema')
 have['casperjs'] = is_cmd_found('casperjs')
+have['phantomjs'] = is_cmd_found('phantomjs')
+have['slimerjs'] = is_cmd_found('slimerjs')
 
 min_zmq = (2,1,11)
 
@@ -203,16 +191,14 @@ if not have['matplotlib']:
 
 # lib:
 sec = test_sections['lib']
-if not have['wx']:
-    sec.exclude('inputhookwx')
-if not have['pexpect']:
-    sec.exclude('irunner')
-    sec.exclude('tests.test_irunner')
 if not have['zmq']:
     sec.exclude('kernel')
 # We do this unconditionally, so that the test suite doesn't import
 # gtk, changing the default encoding and masking some unicode bugs.
 sec.exclude('inputhookgtk')
+# We also do this unconditionally, because wx can interfere with Unix signals.
+# There are currently no tests for it anyway.
+sec.exclude('inputhookwx')
 # Testing inputhook will need a lot of thought, to figure out
 # how to have tests that don't lock up with the gui event
 # loops in the picture
@@ -220,8 +206,6 @@ sec.exclude('inputhook')
 
 # testing:
 sec = test_sections['testing']
-# This guy is probably attic material
-sec.exclude('mkdoctests')
 # These have to be skipped on win32 because they use echo, rm, cd, etc.
 # See ticket https://github.com/ipython/ipython/issues/87
 if sys.platform == 'win32':
@@ -246,6 +230,7 @@ sec.requires('zmq')
 sec.exclude('inprocess')
 # importing gtk sets the default encoding, which we want to avoid
 sec.exclude('zmq.gui.gtkembed')
+sec.exclude('zmq.gui.gtk3embed')
 if not have['matplotlib']:
     sec.exclude('zmq.pylab')
 
@@ -254,15 +239,8 @@ test_sections['kernel.inprocess'].requires('zmq')
 
 # extensions:
 sec = test_sections['extensions']
-if not have['cython']:
-    sec.exclude('cythonmagic')
-    sec.exclude('tests.test_cythonmagic')
-if not have['oct2py']:
-    sec.exclude('octavemagic')
-    sec.exclude('tests.test_octavemagic')
-if not have['rpy2'] or not have['numpy']:
-    sec.exclude('rmagic')
-    sec.exclude('tests.test_rmagic')
+# This is deprecated in favour of rpy2
+sec.exclude('rmagic')
 # autoreload does some strange stuff, so move it to its own test section
 sec.exclude('autoreload')
 sec.exclude('tests.test_autoreload')
@@ -275,17 +253,17 @@ test_sections['qt'].requires('zmq', 'qt', 'pygments')
 
 # html:
 sec = test_sections['html']
-sec.requires('zmq', 'tornado', 'requests')
+sec.requires('zmq', 'tornado', 'requests', 'sqlite3', 'jsonschema')
 # The notebook 'static' directory contains JS, css and other
 # files for web serving.  Occasionally projects may put a .py
 # file in there (MathJax ships a conf.py), so we might as
 # well play it safe and skip the whole thing.
 sec.exclude('static')
-sec.exclude('fabfile')
+sec.exclude('tasks')
 if not have['jinja2']:
     sec.exclude('notebookapp')
-if not have['azure']:
-    sec.exclude('services.notebooks.azurenbmanager')
+if not have['pygments'] or not have['jinja2']:
+    sec.exclude('nbconvert')
 
 # config:
 # Config files aren't really importable stand-alone
@@ -293,7 +271,7 @@ test_sections['config'].exclude('profile')
 
 # nbconvert:
 sec = test_sections['nbconvert']
-sec.requires('pygments', 'jinja2', 'sphinx')
+sec.requires('pygments', 'jinja2', 'jsonschema', 'mistune')
 # Exclude nbconvert directories containing config files used to test.
 # Executing the config files with iptest would cause an exception.
 sec.exclude('tests.files')
@@ -301,6 +279,9 @@ sec.exclude('exporters.tests.files')
 if not have['tornado']:
     sec.exclude('nbconvert.post_processors.serve')
     sec.exclude('nbconvert.post_processors.tests.test_serve')
+
+# nbformat:
+test_sections['nbformat'].requires('jsonschema')
 
 #-----------------------------------------------------------------------------
 # Functions and classes
@@ -408,14 +389,25 @@ class SubprocessStreamCapturePlugin(Plugin):
     def __init__(self):
         Plugin.__init__(self)
         self.stream_capturer = StreamCapturer()
+        self.destination = os.environ.get('IPTEST_SUBPROC_STREAMS', 'capture')
         # This is ugly, but distant parts of the test machinery need to be able
         # to redirect streams, so we make the object globally accessible.
-        nose.ipy_stream_capturer = self.stream_capturer
+        nose.iptest_stdstreams_fileno = self.get_write_fileno
+
+    def get_write_fileno(self):
+        if self.destination == 'capture':
+            self.stream_capturer.ensure_started()
+            return self.stream_capturer.writefd
+        elif self.destination == 'discard':
+            return os.open(os.devnull, os.O_WRONLY)
+        else:
+            return sys.__stdout__.fileno()
     
     def configure(self, options, config):
         Plugin.configure(self, options, config)
         # Override nose trying to disable plugin.
-        self.enabled = True
+        if self.destination == 'capture':
+            self.enabled = True
     
     def startTest(self, test):
         # Reset log capture

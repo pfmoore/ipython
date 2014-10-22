@@ -1,3 +1,4 @@
+# coding: utf-8
 """test the IPython Kernel"""
 
 #-------------------------------------------------------------------------------
@@ -11,6 +12,8 @@
 # Imports
 #-------------------------------------------------------------------------------
 
+import io
+import os.path
 import sys
 
 import nose.tools as nt
@@ -18,8 +21,10 @@ import nose.tools as nt
 from IPython.testing import decorators as dec, tools as tt
 from IPython.utils import py3compat
 from IPython.utils.path import locate_profile
+from IPython.utils.tempdir import TemporaryDirectory
 
-from .utils import new_kernel, kernel, TIMEOUT, assemble_output, execute, flush_channels
+from .utils import (new_kernel, kernel, TIMEOUT, assemble_output, execute,
+                    flush_channels, wait_for_idle)
 
 #-------------------------------------------------------------------------------
 # Tests
@@ -180,7 +185,40 @@ def test_eval_input():
         nt.assert_equal(stdout, "2\n")
 
 
+def test_save_history():
+    # Saving history from the kernel with %hist -f was failing because of
+    # unicode problems on Python 2.
+    with kernel() as kc, TemporaryDirectory() as td:
+        file = os.path.join(td, 'hist.out')
+        execute(u'a=1', kc=kc)
+        wait_for_idle(kc)
+        execute(u'b=u"abcþ"', kc=kc)
+        wait_for_idle(kc)
+        _, reply = execute("%hist -f " + file, kc=kc)
+        nt.assert_equal(reply['status'], 'ok')
+        with io.open(file, encoding='utf-8') as f:
+            content = f.read()
+        nt.assert_in(u'a=1', content)
+        nt.assert_in(u'b=u"abcþ"', content)
+
 def test_help_output():
     """ipython kernel --help-all works"""
     tt.help_all_output_test('kernel')
 
+def test_is_complete():
+    with kernel() as kc:
+        # There are more test cases for this in core - here we just check
+        # that the kernel exposes the interface correctly.
+        kc.is_complete('2+2')
+        reply = kc.get_shell_msg(block=True, timeout=TIMEOUT)
+        assert reply['content']['status'] == 'complete'
+
+        # SyntaxError should mean it's complete        
+        kc.is_complete('raise = 2')
+        reply = kc.get_shell_msg(block=True, timeout=TIMEOUT)
+        assert reply['content']['status'] == 'invalid'
+        
+        kc.is_complete('a = [1,\n2,')
+        reply = kc.get_shell_msg(block=True, timeout=TIMEOUT)
+        assert reply['content']['status'] == 'incomplete'
+        assert reply['content']['indent'] == ''

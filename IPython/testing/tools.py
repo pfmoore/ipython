@@ -59,17 +59,17 @@ def full_path(startPath,files):
     """Make full paths for all the listed files, based on startPath.
 
     Only the base part of startPath is kept, since this routine is typically
-    used with a script's __file__ variable as startPath.  The base of startPath
+    used with a script's ``__file__`` variable as startPath. The base of startPath
     is then prepended to all the listed files, forming the output list.
 
     Parameters
     ----------
-      startPath : string
-        Initial path to use as the base for the results.  This path is split
+    startPath : string
+      Initial path to use as the base for the results.  This path is split
       using os.path.split() and only its first component is kept.
 
-      files : string or list
-        One or more files.
+    files : string or list
+      One or more files.
 
     Examples
     --------
@@ -80,9 +80,10 @@ def full_path(startPath,files):
     >>> full_path('/foo',['a.txt','b.txt'])
     ['/a.txt', '/b.txt']
 
-    If a single file is given, the output is still a list:
-    >>> full_path('/foo','a.txt')
-    ['/a.txt']
+    If a single file is given, the output is still a list::
+
+        >>> full_path('/foo','a.txt')
+        ['/a.txt']
     """
 
     files = list_strings(files)
@@ -105,7 +106,8 @@ def parse_test_output(txt):
 
     Returns
     -------
-    nerr, nfail: number of errors and failures.
+    nerr, nfail
+      number of errors and failures.
     """
 
     err_m = re.search(r'^FAILED \(errors=(\d+)\)', txt, re.MULTILINE)
@@ -150,7 +152,9 @@ def default_config():
     config.TerminalInteractiveShell.colors = 'NoColor'
     config.TerminalTerminalInteractiveShell.term_title = False,
     config.TerminalInteractiveShell.autocall = 0
-    config.HistoryManager.hist_file = tempfile.mktemp(u'test_hist.sqlite')
+    f = tempfile.NamedTemporaryFile(suffix=u'test_hist.sqlite', delete=False)
+    config.HistoryManager.hist_file = f.name
+    f.close()
     config.HistoryManager.db_cache_size = 10000
     return config
 
@@ -209,7 +213,9 @@ def ipexec(fname, options=None):
     # Absolute path for filename
     full_fname = os.path.join(test_dir, fname)
     full_cmd = ipython_cmd + cmdargs + [full_fname]
-    p = Popen(full_cmd, stdout=PIPE, stderr=PIPE)
+    env = os.environ.copy()
+    env.pop('PYTHONWARNINGS', None)  # Avoid extraneous warnings appearing on stderr
+    p = Popen(full_cmd, stdout=PIPE, stderr=PIPE, env=env)
     out, err = p.communicate()
     out, err = py3compat.bytes_to_str(out), py3compat.bytes_to_str(err)
     # `import readline` causes 'ESC[?1034h' to be output sometimes,
@@ -325,6 +331,8 @@ else:
             s = py3compat.cast_unicode(s, encoding=DEFAULT_ENCODING)
             super(MyStringIO, self).write(s)
 
+_re_type = type(re.compile(r''))
+
 notprinted_msg = """Did not find {0!r} in printed output (on {1}):
 -------
 {2!s}
@@ -345,7 +353,7 @@ class AssertPrints(object):
     """
     def __init__(self, s, channel='stdout', suppress=True):
         self.s = s
-        if isinstance(self.s, py3compat.string_types):
+        if isinstance(self.s, (py3compat.string_types, _re_type)):
             self.s = [self.s]
         self.channel = channel
         self.suppress = suppress
@@ -357,15 +365,21 @@ class AssertPrints(object):
         setattr(sys, self.channel, self.buffer if self.suppress else self.tee)
     
     def __exit__(self, etype, value, traceback):
-        if value is not None:
-            # If an error was raised, don't check anything else
+        try:
+            if value is not None:
+                # If an error was raised, don't check anything else
+                return False
+            self.tee.flush()
+            setattr(sys, self.channel, self.orig_stream)
+            printed = self.buffer.getvalue()
+            for s in self.s:
+                if isinstance(s, _re_type):
+                    assert s.search(printed), notprinted_msg.format(s.pattern, self.channel, printed)
+                else:
+                    assert s in printed, notprinted_msg.format(s, self.channel, printed)
             return False
-        self.tee.flush()
-        setattr(sys, self.channel, self.orig_stream)
-        printed = self.buffer.getvalue()
-        for s in self.s:
-            assert s in printed, notprinted_msg.format(s, self.channel, printed)
-        return False
+        finally:
+            self.tee.close()
 
 printed_msg = """Found {0!r} in printed output (on {1}):
 -------
@@ -378,15 +392,24 @@ class AssertNotPrints(AssertPrints):
     
     Counterpart of AssertPrints"""
     def __exit__(self, etype, value, traceback):
-        if value is not None:
-            # If an error was raised, don't check anything else
+        try:
+            if value is not None:
+                # If an error was raised, don't check anything else
+                self.tee.close()
+                return False
+            self.tee.flush()
+            setattr(sys, self.channel, self.orig_stream)
+            printed = self.buffer.getvalue()
+            for s in self.s:
+                if isinstance(s, _re_type):
+                    assert not s.search(printed),printed_msg.format(
+                        s.pattern, self.channel, printed)
+                else:
+                    assert s not in printed, printed_msg.format(
+                        s, self.channel, printed)
             return False
-        self.tee.flush()
-        setattr(sys, self.channel, self.orig_stream)
-        printed = self.buffer.getvalue()
-        for s in self.s:
-            assert s not in printed, printed_msg.format(s, self.channel, printed)
-        return False
+        finally:
+            self.tee.close()
 
 @contextmanager
 def mute_warn():
@@ -423,7 +446,7 @@ def monkeypatch(obj, name, attr):
 
 def help_output_test(subcommand=''):
     """test that `ipython [subcommand] -h` works"""
-    cmd = ' '.join(get_ipython_cmd() + [subcommand, '-h'])
+    cmd = get_ipython_cmd() + [subcommand, '-h']
     out, err, rc = get_output_error_code(cmd)
     nt.assert_equal(rc, 0, err)
     nt.assert_not_in("Traceback", err)
@@ -434,7 +457,7 @@ def help_output_test(subcommand=''):
 
 def help_all_output_test(subcommand=''):
     """test that `ipython [subcommand] --help-all` works"""
-    cmd = ' '.join(get_ipython_cmd() + [subcommand, '--help-all'])
+    cmd = get_ipython_cmd() + [subcommand, '--help-all']
     out, err, rc = get_output_error_code(cmd)
     nt.assert_equal(rc, 0, err)
     nt.assert_not_in("Traceback", err)
@@ -442,3 +465,23 @@ def help_all_output_test(subcommand=''):
     nt.assert_in("Class parameters", out)
     return out, err
 
+def assert_big_text_equal(a, b, chunk_size=80):
+    """assert that large strings are equal
+
+    Zooms in on first chunk that differs,
+    to give better info than vanilla assertEqual for large text blobs.
+    """
+    for i in range(0, len(a), chunk_size):
+        chunk_a = a[i:i + chunk_size]
+        chunk_b = b[i:i + chunk_size]
+        nt.assert_equal(chunk_a, chunk_b, "[offset: %i]\n%r != \n%r" % (
+            i, chunk_a, chunk_b))
+
+    if len(a) > len(b):
+        nt.fail("Length doesn't match (%i > %i). Extra text:\n%r" % (
+            len(a), len(b), a[len(b):]
+        ))
+    elif len(a) < len(b):
+        nt.fail("Length doesn't match (%i < %i). Extra text:\n%r" % (
+            len(a), len(b), b[len(a):]
+        ))

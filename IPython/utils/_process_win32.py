@@ -112,7 +112,7 @@ def system(cmd):
 
     Parameters
     ----------
-    cmd : str
+    cmd : str or list
       A command to be executed in the system shell.
 
     Returns
@@ -138,7 +138,7 @@ def getoutput(cmd):
 
     Parameters
     ----------
-    cmd : str
+    cmd : str or list
       A command to be executed in the system shell.
 
     Returns
@@ -185,3 +185,8 @@ try:
         return result
 except AttributeError:
     arg_split = py_arg_split
+
+def check_pid(pid):
+    # OpenProcess returns 0 if no such process (of ours) exists
+    # positive int otherwise
+    return bool(ctypes.windll.kernel32.OpenProcess(1,0,pid))

@@ -1,24 +1,10 @@
 # encoding: utf-8
-"""
-A base class for a configurable application.
+"""A base class for a configurable application."""
 
-Authors:
+# Copyright (c) IPython Development Team.
+# Distributed under the terms of the Modified BSD License.
 
-* Brian Granger
-* Min RK
-"""
 from __future__ import print_function
-
-#-----------------------------------------------------------------------------
-#  Copyright (C) 2008-2011  The IPython Development Team
-#
-#  Distributed under the terms of the BSD License.  The full license is in
-#  the file COPYING, distributed as part of this software.
-#-----------------------------------------------------------------------------
-
-#-----------------------------------------------------------------------------
-# Imports
-#-----------------------------------------------------------------------------
 
 import logging
 import os
@@ -31,7 +17,7 @@ from IPython.external.decorator import decorator
 
 from IPython.config.configurable import SingletonConfigurable
 from IPython.config.loader import (
-    KVArgParseConfigLoader, PyFileConfigLoader, Config, ArgumentError, ConfigFileNotFound,
+    KVArgParseConfigLoader, PyFileConfigLoader, Config, ArgumentError, ConfigFileNotFound, JSONFileConfigLoader
 )
 
 from IPython.utils.traitlets import (
@@ -41,10 +27,6 @@ from IPython.utils.importstring import import_item
 from IPython.utils.text import indent, wrap_paragraphs, dedent
 from IPython.utils import py3compat
 from IPython.utils.py3compat import string_types, iteritems
-
-#-----------------------------------------------------------------------------
-# function for re-wrapping a helpstring
-#-----------------------------------------------------------------------------
 
 #-----------------------------------------------------------------------------
 # Descriptions for the various sections
@@ -72,7 +54,7 @@ if not hasattr(sys, "argv"):
 subcommand_description = """
 Subcommands are launched as `{app} cmd [args]`. For information on using
 subcommand 'cmd', do: `{app} cmd -h`.
-""".strip().format(app=os.path.basename(sys.argv[0]))
+"""
 # get running program name
 
 #-----------------------------------------------------------------------------
@@ -141,7 +123,16 @@ class Application(SingletonConfigurable):
 
     # A sequence of Configurable subclasses whose config=True attributes will
     # be exposed at the command line.
-    classes = List([])
+    classes = []
+    @property
+    def _help_classes(self):
+        """Define `App.help_classes` if CLI classes should differ from config file classes"""
+        return getattr(self, 'help_classes', self.classes)
+    
+    @property
+    def _config_classes(self):
+        """Define `App.config_classes` if config file classes should differ from CLI classes."""
+        return getattr(self, 'config_classes', self.classes)
 
     # The version string of this application.
     version = Unicode(u'0.0')
@@ -161,6 +152,8 @@ class Application(SingletonConfigurable):
             self.log_level = new
         self.log.setLevel(new)
     
+    _log_formatter_cls = LevelFormatter
+    
     log_datefmt = Unicode("%Y-%m-%d %H:%M:%S", config=True,
         help="The date format used by logging formatters for %(asctime)s"
     )
@@ -173,8 +166,9 @@ class Application(SingletonConfigurable):
     def _log_format_changed(self, name, old, new):
         """Change the log formatter when log_format is set."""
         _log_handler = self.log.handlers[0]
-        _log_formatter = LevelFormatter(new, datefmt=self.log_datefmt)
+        _log_formatter = self._log_formatter_cls(fmt=new, datefmt=self.log_datefmt)
         _log_handler.setFormatter(_log_formatter)
+    
 
     log = Instance(logging.Logger)
     def _log_default(self):
@@ -201,7 +195,7 @@ class Application(SingletonConfigurable):
             _log_handler = logging.StreamHandler(open(os.devnull, 'w'))
         else:
             _log_handler = logging.StreamHandler()
-        _log_formatter = LevelFormatter(self.log_format, datefmt=self.log_datefmt)
+        _log_formatter = self._log_formatter_cls(fmt=self.log_format, datefmt=self.log_datefmt)
         _log_handler.setFormatter(_log_formatter)
         log.addHandler(_log_handler)
         return log
@@ -271,7 +265,7 @@ class Application(SingletonConfigurable):
 
         lines = []
         classdict = {}
-        for cls in self.classes:
+        for cls in self._help_classes:
             # include all parents (up to, but excluding Configurable) in available names
             for c in cls.mro()[:-3]:
                 classdict[c.__name__] = c
@@ -325,7 +319,8 @@ class Application(SingletonConfigurable):
         lines = ["Subcommands"]
         lines.append('-'*len(lines[0]))
         lines.append('')
-        for p in wrap_paragraphs(self.subcommand_description):
+        for p in wrap_paragraphs(self.subcommand_description.format(
+                    app=self.name)):
             lines.append(p)
             lines.append('')
         for subc, (cls, help) in iteritems(self.subcommands):
@@ -345,7 +340,8 @@ class Application(SingletonConfigurable):
         self.print_options()
 
         if classes:
-            if self.classes:
+            help_classes = self._help_classes
+            if help_classes:
                 print("Class parameters")
                 print("----------------")
                 print()
@@ -353,7 +349,7 @@ class Application(SingletonConfigurable):
                     print(p)
                     print()
 
-            for cls in self.classes:
+            for cls in help_classes:
                 cls.class_print_help()
                 print()
         else:
@@ -426,7 +422,7 @@ class Application(SingletonConfigurable):
         # it will be a dict by parent classname of classes in our list
         # that are descendents
         mro_tree = defaultdict(list)
-        for cls in self.classes:
+        for cls in self._help_classes:
             clsname = cls.__name__
             for parent in cls.mro()[1:-3]:
                 # exclude cls itself and Configurable,HasTraits,object
@@ -492,33 +488,51 @@ class Application(SingletonConfigurable):
         
         # flatten flags&aliases, so cl-args get appropriate priority:
         flags,aliases = self.flatten_flags()
-
         loader = KVArgParseConfigLoader(argv=argv, aliases=aliases,
-                                        flags=flags)
+                                        flags=flags, log=self.log)
         config = loader.load_config()
         self.update_config(config)
         # store unparsed args in extra_args
         self.extra_args = loader.extra_args
 
+    @classmethod
+    def _load_config_files(cls, basefilename, path=None, log=None):
+        """Load config files (py,json) by filename and path.
+
+        yield each config object in turn.
+        """
+        pyloader = PyFileConfigLoader(basefilename+'.py', path=path, log=log)
+        jsonloader = JSONFileConfigLoader(basefilename+'.json', path=path, log=log)
+        config = None
+        for loader in [pyloader, jsonloader]:
+            try:
+                config = loader.load_config()
+            except ConfigFileNotFound:
+                pass
+            except Exception:
+                # try to get the full filename, but it will be empty in the
+                # unlikely event that the error raised before filefind finished
+                filename = loader.full_filename or basefilename
+                # problem while running the file
+                if log:
+                    log.error("Exception while loading config file %s",
+                            filename, exc_info=True)
+            else:
+                if log:
+                    log.debug("Loaded config file: %s", loader.full_filename)
+            if config:
+                 yield config
+
+        raise StopIteration
+
+
     @catch_config_error
     def load_config_file(self, filename, path=None):
-        """Load a .py based config file by filename and path."""
-        loader = PyFileConfigLoader(filename, path=path)
-        try:
-            config = loader.load_config()
-        except ConfigFileNotFound:
-            # problem finding the file, raise
-            raise
-        except Exception:
-            # try to get the full filename, but it will be empty in the
-            # unlikely event that the error raised before filefind finished
-            filename = loader.full_filename or filename
-            # problem while running the file
-            self.log.error("Exception while loading config file %s",
-                            filename, exc_info=True)
-        else:
-            self.log.debug("Loaded config file: %s", loader.full_filename)
+        """Load config files by filename and path."""
+        filename, ext = os.path.splitext(filename)
+        for config in self._load_config_files(filename, path=path, log=self.log):
             self.update_config(config)
+
 
     def generate_config_file(self):
         """generate default config file from Configurables"""
@@ -526,7 +540,7 @@ class Application(SingletonConfigurable):
         lines.append('')
         lines.append('c = get_config()')
         lines.append('')
-        for cls in self.classes:
+        for cls in self._config_classes:
             lines.append(cls.class_config_section())
         return '\n'.join(lines)
 

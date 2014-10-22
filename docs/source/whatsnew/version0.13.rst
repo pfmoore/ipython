@@ -298,7 +298,7 @@ extremely useful.  The following extensions are provided:
 
 .. _cython: http://cython.org
 
-**Octave magics** (extension :ref:`octavemagic <extensions_octavemagic>`)
+**Octave magics** (extension ``octavemagic``)
     This extension provides several magics that support calling code written in
     the Octave_ language for numerical computing.  You can execute single-lines
     or whole blocks of Octave code, capture both output and figures inline
@@ -317,7 +317,7 @@ extremely useful.  The following extensions are provided:
 .. _octave: http://www.gnu.org/software/octave
 .. _oct2py: http://pypi.python.org/pypi/oct2py
 
-**R magics** (extension :ref:`rmagic <extensions_rmagic>`)
+**R magics** (extension ``rmagic``)
     This extension provides several magics that support calling code written in
     the R_ language for statistical data analysis.  You can execute
     single-lines or whole blocks of R code, capture both output and figures

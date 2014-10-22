@@ -1,12 +1,11 @@
-""" A FrontendWidget that emulates the interface of the console IPython and
-    supports the additional functionality provided by the IPython kernel.
+"""A FrontendWidget that emulates the interface of the console IPython.
+
+This supports the additional functionality provided by the IPython kernel.
 """
 
-#-----------------------------------------------------------------------------
-# Imports
-#-----------------------------------------------------------------------------
+# Copyright (c) IPython Development Team.
+# Distributed under the terms of the Modified BSD License.
 
-# Standard library imports
 from collections import namedtuple
 import os.path
 import re
@@ -15,11 +14,10 @@ import sys
 import time
 from textwrap import dedent
 
-# System library imports
 from IPython.external.qt import QtCore, QtGui
 
-# Local imports
 from IPython.core.inputsplitter import IPythonInputSplitter
+from IPython.core.release import version
 from IPython.core.inputtransformer import ipy_prompt
 from IPython.utils.traitlets import Bool, Unicode
 from .frontend_widget import FrontendWidget
@@ -110,6 +108,7 @@ class IPythonWidget(FrontendWidget):
     _payload_source_next_input = 'set_next_input'
     _payload_source_page = 'page'
     _retrying_history_request = False
+    _starting = False
 
     #---------------------------------------------------------------------------
     # 'object' interface
@@ -134,10 +133,11 @@ class IPythonWidget(FrontendWidget):
         else:
             self.set_default_style()
 
+        self._guiref_loaded = False
+
     #---------------------------------------------------------------------------
     # 'BaseFrontendMixin' abstract interface
     #---------------------------------------------------------------------------
-
     def _handle_complete_reply(self, rep):
         """ Reimplemented to support IPython's improved completion machinery.
         """
@@ -146,23 +146,28 @@ class IPythonWidget(FrontendWidget):
         info = self._request_info.get('complete')
         if info and info.id == rep['parent_header']['msg_id'] and \
                 info.pos == cursor.position():
-            matches = rep['content']['matches']
-            text = rep['content']['matched_text']
-            offset = len(text)
+            content = rep['content']
+            matches = content['matches']
+            start = content['cursor_start']
+            end = content['cursor_end']
+            
+            start = max(start, 0)
+            end = max(end, start)
 
-            # Clean up matches with period and path separators if the matched
-            # text has not been transformed. This is done by truncating all
-            # but the last component and then suitably decreasing the offset
-            # between the current cursor position and the start of completion.
-            if len(matches) > 1 and matches[0][:offset] == text:
-                parts = re.split(r'[./\\]', text)
-                sep_count = len(parts) - 1
-                if sep_count:
-                    chop_length = sum(map(len, parts[:sep_count])) + sep_count
-                    matches = [ match[chop_length:] for match in matches ]
-                    offset -= chop_length
+            # Move the control's cursor to the desired end point
+            cursor_pos = self._get_input_buffer_cursor_pos()
+            if end < cursor_pos:
+                cursor.movePosition(QtGui.QTextCursor.Left,
+                                    n=(cursor_pos - end))
+            elif end > cursor_pos:
+                cursor.movePosition(QtGui.QTextCursor.Right,
+                                    n=(end - cursor_pos))
+            # This line actually applies the move to control's cursor
+            self._control.setTextCursor(cursor)
 
-            # Move the cursor to the start of the match and complete.
+            offset = end - start
+            # Move the local cursor object to the start of the match and
+            # complete.
             cursor.movePosition(QtGui.QTextCursor.Left, n=offset)
             self._complete_with_items(cursor, matches)
 
@@ -172,11 +177,15 @@ class IPythonWidget(FrontendWidget):
         msg_id = msg['parent_header'].get('msg_id')
         info = self._request_info['execute'].get(msg_id)
         if info and info.kind == 'prompt':
-           number = msg['content']['execution_count'] + 1
-           self._show_interpreter_prompt(number)
-           self._request_info['execute'].pop(msg_id)
+            content = msg['content']
+            if content['status'] == 'aborted':
+                self._show_interpreter_prompt()
+            else:
+                number = content['execution_count'] + 1
+                self._show_interpreter_prompt(number)
+            self._request_info['execute'].pop(msg_id)
         else:
-           super(IPythonWidget, self)._handle_execute_reply(msg)
+            super(IPythonWidget, self)._handle_execute_reply(msg)
 
     def _handle_history_reply(self, msg):
         """ Implemented to handle history tail replies, which are only supported
@@ -210,22 +219,35 @@ class IPythonWidget(FrontendWidget):
                 items.append(cell)
                 last_cell = cell
         self._set_history(items)
+    
+    def _insert_other_input(self, cursor, content):
+        """Insert function for input from other frontends"""
+        cursor.beginEditBlock()
+        start = cursor.position()
+        n = content.get('execution_count', 0)
+        cursor.insertText('\n')
+        self._insert_html(cursor, self._make_in_prompt(n))
+        cursor.insertText(content['code'])
+        self._highlighter.rehighlightBlock(cursor.block())
+        cursor.endEditBlock()
+        
+    def _handle_execute_input(self, msg):
+        """Handle an execute_input message"""
+        self.log.debug("execute_input: %s", msg.get('content', ''))
+        if self.include_output(msg):
+            self._append_custom(self._insert_other_input, msg['content'], before_prompt=True)
 
-    def _handle_pyout(self, msg):
+    
+    def _handle_execute_result(self, msg):
         """ Reimplemented for IPython-style "display hook".
         """
-        self.log.debug("pyout: %s", msg.get('content', ''))
-        if not self._hidden and self._is_from_this_session(msg):
+        self.log.debug("execute_result: %s", msg.get('content', ''))
+        if self.include_output(msg):
+            self.flush_clearoutput()
             content = msg['content']
             prompt_number = content.get('execution_count', 0)
             data = content['data']
-            if 'text/html' in data:
-                self._append_plain_text(self.output_sep, True)
-                self._append_html(self._make_out_prompt(prompt_number), True)
-                html = data['text/html']
-                self._append_plain_text('\n', True)
-                self._append_html(html + self.output_sep2, True)
-            elif 'text/plain' in data:
+            if 'text/plain' in data:
                 self._append_plain_text(self.output_sep, True)
                 self._append_html(self._make_out_prompt(prompt_number), True)
                 text = data['text/plain']
@@ -242,35 +264,40 @@ class IPythonWidget(FrontendWidget):
         # For now, we don't display data from other frontends, but we
         # eventually will as this allows all frontends to monitor the display
         # data. But we need to figure out how to handle this in the GUI.
-        if not self._hidden and self._is_from_this_session(msg):
-            source = msg['content']['source']
+        if self.include_output(msg):
+            self.flush_clearoutput()
             data = msg['content']['data']
             metadata = msg['content']['metadata']
             # In the regular IPythonWidget, we simply print the plain text
             # representation.
-            if 'text/html' in data:
-                html = data['text/html']
-                self._append_html(html, True)
-            elif 'text/plain' in data:
+            if 'text/plain' in data:
                 text = data['text/plain']
                 self._append_plain_text(text, True)
             # This newline seems to be needed for text and html output.
             self._append_plain_text(u'\n', True)
 
+    def _handle_kernel_info_reply(self, rep):
+        """Handle kernel info replies."""
+        content = rep['content']
+        if not self._guiref_loaded:
+            if content.get('language') == 'python':
+                self._load_guiref_magic()
+            self._guiref_loaded = True
+        
+        self.kernel_banner = content.get('banner', '')
+        if self._starting:
+            # finish handling started channels
+            self._starting = False
+            super(IPythonWidget, self)._started_channels()
+
     def _started_channels(self):
         """Reimplemented to make a history request and load %guiref."""
-        super(IPythonWidget, self)._started_channels()
-        self._load_guiref_magic()
+        self._starting = True
+        # The reply will trigger %guiref load provided language=='python'
+        self.kernel_client.kernel_info()
+
         self.kernel_client.shell_channel.history(hist_access_type='tail',
                                                   n=1000)
-    
-    def _started_kernel(self):
-        """Load %guiref when the kernel starts (if channels are also started).
-        
-        Principally triggered by kernel restart.
-        """
-        if self.kernel_client.shell_channel is not None:
-            self._load_guiref_magic()
     
     def _load_guiref_magic(self):
         """Load %guiref magic."""
@@ -320,24 +347,6 @@ class IPythonWidget(FrontendWidget):
     #---------------------------------------------------------------------------
     # 'FrontendWidget' protected interface
     #---------------------------------------------------------------------------
-
-    def _complete(self):
-        """ Reimplemented to support IPython's improved completion machinery.
-        """
-        # We let the kernel split the input line, so we *always* send an empty
-        # text field. Readline-based frontends do get a real text field which
-        # they can use.
-        text = ''
-
-        # Send the completion request to the kernel
-        msg_id = self.kernel_client.shell_channel.complete(
-            text,                                    # text
-            self._get_input_buffer_cursor_line(),    # line
-            self._get_input_buffer_cursor_column(),  # cursor_pos
-            self.input_buffer)                       # block
-        pos = self._get_cursor().position()
-        info = self._CompletionRequest(msg_id, pos)
-        self._request_info['complete'] = info
 
     def _process_execute_error(self, msg):
         """ Reimplemented for IPython-style traceback formatting.
@@ -438,8 +447,8 @@ class IPythonWidget(FrontendWidget):
     def set_default_style(self, colors='lightbg'):
         """ Sets the widget style to the class defaults.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         colors : str, optional (default lightbg)
             Whether to use the default IPython light background or dark
             background or B&W style.
@@ -464,8 +473,8 @@ class IPythonWidget(FrontendWidget):
     def _edit(self, filename, line=None):
         """ Opens a Python script for editing.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         filename : str
             A path to a local system file.
 
@@ -507,7 +516,8 @@ class IPythonWidget(FrontendWidget):
             body = self.in_prompt % number
         except TypeError:
             # allow in_prompt to leave out number, e.g. '>>> '
-            body = self.in_prompt
+            from xml.sax.saxutils import escape
+            body = escape(self.in_prompt)
         return '<span class="in-prompt">%s</span>' % body
 
     def _make_continuation_prompt(self, prompt):
@@ -522,7 +532,12 @@ class IPythonWidget(FrontendWidget):
     def _make_out_prompt(self, number):
         """ Given a prompt number, returns an HTML Out prompt.
         """
-        body = self.out_prompt % number
+        try:
+            body = self.out_prompt % number
+        except TypeError:
+            # allow out_prompt to leave out number, e.g. '<<< '
+            from xml.sax.saxutils import escape
+            body = escape(self.out_prompt)
         return '<span class="out-prompt">%s</span>' % body
 
     #------ Payload handlers --------------------------------------------------
@@ -539,16 +554,17 @@ class IPythonWidget(FrontendWidget):
         self.exit_requested.emit(self)
 
     def _handle_payload_next_input(self, item):
-        self.input_buffer = dedent(item['text'].rstrip())
+        self.input_buffer = item['text']
 
     def _handle_payload_page(self, item):
         # Since the plain text widget supports only a very small subset of HTML
         # and we have no control over the HTML source, we only page HTML
         # payloads in the rich text widget.
-        if item['html'] and self.kind == 'rich':
-            self._page(item['html'], html=True)
+        data = item['data']
+        if 'text/html' in data and self.kind == 'rich':
+            self._page(data['text/html'], html=True)
         else:
-            self._page(item['text'], html=False)
+            self._page(data['text/plain'], html=False)
 
     #------ Trait change handlers --------------------------------------------
 
@@ -580,5 +596,4 @@ class IPythonWidget(FrontendWidget):
     #------ Trait default initializers -----------------------------------------
 
     def _banner_default(self):
-        from IPython.core.usage import default_gui_banner
-        return default_gui_banner
+        return "IPython QtConsole {version}\n".format(version=version)

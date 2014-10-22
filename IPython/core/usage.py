@@ -291,7 +291,7 @@ cd /usr/share    : Obvious. cd -<tab> to choose from visited dirs.
 %cd??            : See help AND source for magic %cd
 %timeit x=10     : time the 'x=10' statement with high precision.
 %%timeit x=2**100
-x**100           : time 'x*100' with a setup of 'x=2**100'; setup code is not
+x**100           : time 'x**100' with a setup of 'x=2**100'; setup code is not
                    counted.  This is an example of a cell magic.
 
 System commands:
@@ -566,5 +566,5 @@ default_gui_banner = ''.join(default_gui_banner_parts)
 def page_guiref(arg_s=None):
     """Show a basic reference about the GUI Console."""
     from IPython.core import page
-    page.page(gui_reference, auto_html=True)
+    page.page(gui_reference)
 

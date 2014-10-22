@@ -1,25 +1,15 @@
-"""Module that allows latex output notebooks to be conditioned before
-they are converted.  Exposes a decorator (@cell_preprocessor) in
-addition to the coalesce_streams pre-proccessor.
-"""
-#-----------------------------------------------------------------------------
-# Copyright (c) 2013, the IPython Development Team.
-#
-# Distributed under the terms of the Modified BSD License.
-#
-# The full license is in the file COPYING.txt, distributed with this software.
-#-----------------------------------------------------------------------------
+"""Preprocessor for merging consecutive stream outputs for easier handling."""
 
-#-----------------------------------------------------------------------------
-# Functions
-#-----------------------------------------------------------------------------
+# Copyright (c) IPython Development Team.
+# Distributed under the terms of the Modified BSD License.
+
+import re
 
 def cell_preprocessor(function):
     """
     Wrap a function to be executed on all cells of a notebook
     
-    Wrapped Parameters
-    ------------------
+    The wrapped function should have these parameters:
     
     cell : NotebookNode cell
         Notebook cell being processed
@@ -31,12 +21,18 @@ def cell_preprocessor(function):
     """
     
     def wrappedfunc(nb, resources):
-        for worksheet in nb.worksheets :
+        from IPython.config import Application
+        if Application.initialized():
+            Application.instance().log.debug(
+                "Applying preprocessor: %s", function.__name__
+            )
+        for worksheet in nb.worksheets:
             for index, cell in enumerate(worksheet.cells):
                 worksheet.cells[index], resources = function(cell, resources, index)
         return nb, resources
     return wrappedfunc
 
+cr_pat = re.compile(r'.*\r(?=[^\n])')
 
 @cell_preprocessor
 def coalesce_streams(cell, resources, index):
@@ -61,16 +57,21 @@ def coalesce_streams(cell, resources, index):
     
     last = outputs[0]
     new_outputs = [last]
-    
     for output in outputs[1:]:
         if (output.output_type == 'stream' and
             last.output_type == 'stream' and
             last.stream == output.stream
         ):
             last.text += output.text
+
         else:
             new_outputs.append(output)
             last = output
+    
+    # process \r characters
+    for output in new_outputs:
+        if output.output_type == 'stream' and '\r' in output.text:
+            output.text = cr_pat.sub('', output.text)
 
     cell.outputs = new_outputs
     return cell, resources

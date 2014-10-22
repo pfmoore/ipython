@@ -1,26 +1,7 @@
 #!/usr/bin/env python
 # encoding: utf-8
-"""
-The ipcluster application.
-
-Authors:
-
-* Brian Granger
-* MinRK
-
-"""
+"""The ipcluster application."""
 from __future__ import print_function
-
-#-----------------------------------------------------------------------------
-#  Copyright (C) 2008-2011  The IPython Development Team
-#
-#  Distributed under the terms of the BSD License.  The full license is in
-#  the file COPYING, distributed as part of this software.
-#-----------------------------------------------------------------------------
-
-#-----------------------------------------------------------------------------
-# Imports
-#-----------------------------------------------------------------------------
 
 import errno
 import logging
@@ -30,9 +11,8 @@ import signal
 
 from subprocess import check_call, CalledProcessError, PIPE
 import zmq
-from zmq.eventloop import ioloop
 
-from IPython.config.application import Application, boolean_flag, catch_config_error
+from IPython.config.application import catch_config_error
 from IPython.config.loader import Config
 from IPython.core.application import BaseIPythonApplication
 from IPython.core.profiledir import ProfileDir
@@ -348,10 +328,14 @@ class IPClusterEngines(BaseParallelApplication):
         # Some EngineSetLaunchers ignore `n` and use their own engine count, such as SSH:
         n = getattr(self.engine_launcher, 'engine_count', self.n)
         self.log.info("Starting %s Engines with %s", n, self.engine_launcher_class)
-        self.engine_launcher.start(self.n)
+        try:
+            self.engine_launcher.start(self.n)
+        except:
+            self.log.exception("Engine start failed")
+            raise
         self.engine_launcher.on_stop(self.engines_stopped_early)
         if self.early_shutdown:
-            ioloop.DelayedCallback(self.engines_started_ok, self.early_shutdown*1000, self.loop).start()
+            self.loop.add_timeout(self.loop.time() + self.early_shutdown, self.engines_started_ok)
 
     def engines_stopped_early(self, r):
         if self.early_shutdown and not self._stopping:
@@ -389,8 +373,7 @@ class IPClusterEngines(BaseParallelApplication):
             self.log.error("IPython cluster: stopping")
             self.stop_engines()
             # Wait a few seconds to let things shut down.
-            dc = ioloop.DelayedCallback(self.loop.stop, 3000, self.loop)
-            dc.start()
+            self.loop.add_timeout(self.loop.time() + 3, self.loop.stop)
 
     def sigint_handler(self, signum, frame):
         self.log.debug("SIGINT received, stopping launchers...")
@@ -401,10 +384,8 @@ class IPClusterEngines(BaseParallelApplication):
         if self.clean_logs:
             log_dir = self.profile_dir.log_dir
             for f in os.listdir(log_dir):
-                if re.match(r'ip(engine|controller)z-\d+\.(log|err|out)',f):
+                if re.match(r'ip(engine|controller)-.+\.(log|err|out)',f):
                     os.remove(os.path.join(log_dir, f))
-        # This will remove old log files for ipcluster itself
-        # super(IPBaseParallelApplication, self).start_logging()
 
     def start(self):
         """Start the app for the engines subcommand."""
@@ -419,9 +400,8 @@ class IPClusterEngines(BaseParallelApplication):
         if self.daemonize:
             if os.name=='posix':
                 daemonize()
-
-        dc = ioloop.DelayedCallback(self.start_engines, 0, self.loop)
-        dc.start()
+        
+        self.loop.add_callback(self.start_engines)
         # Now write the new pid file AFTER our new forked pid is active.
         # self.write_pid_file()
         try:
@@ -519,7 +499,11 @@ class IPClusterStart(IPClusterEngines):
     def start_controller(self):
         self.log.info("Starting Controller with %s", self.controller_launcher_class)
         self.controller_launcher.on_stop(self.stop_launchers)
-        self.controller_launcher.start()
+        try:
+            self.controller_launcher.start()
+        except:
+            self.log.exception("Controller start failed")
+            raise
 
     def stop_controller(self):
         # self.log.info("In stop_controller")
@@ -559,11 +543,11 @@ class IPClusterStart(IPClusterEngines):
         if self.daemonize:
             if os.name=='posix':
                 daemonize()
-
-        dc = ioloop.DelayedCallback(self.start_controller, 0, self.loop)
-        dc.start()
-        dc = ioloop.DelayedCallback(self.start_engines, 1000*self.delay, self.loop)
-        dc.start()
+        
+        def start():
+            self.start_controller()
+            self.loop.add_timeout(self.loop.time() + self.delay, self.start_engines)
+        self.loop.add_callback(start)
         # Now write the new pid file AFTER our new forked pid is active.
         self.write_pid_file()
         try:

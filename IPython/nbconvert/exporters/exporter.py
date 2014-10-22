@@ -1,5 +1,5 @@
-"""This module defines Exporter, a highly configurable converter
-that uses Jinja2 to export notebook files into different formats.
+"""This module defines a base Exporter class. For Jinja template-based export,
+see templateexporter.py.
 """
 
 #-----------------------------------------------------------------------------
@@ -32,9 +32,6 @@ from IPython.utils.traitlets import MetaHasTraits, Unicode, List
 from IPython.utils.importstring import import_item
 from IPython.utils import text, py3compat
 
-from IPython.nbconvert import preprocessors as nbpreprocessors
-
-
 #-----------------------------------------------------------------------------
 # Class
 #-----------------------------------------------------------------------------
@@ -56,11 +53,16 @@ class Exporter(LoggingConfigurable):
         help="Extension of the file that should be written to disk"
         )
 
+    # MIME type of the result file, for HTTP response headers.
+    # This is *not* a traitlet, because we want to be able to access it from
+    # the class, not just on instances.
+    output_mimetype = ''
+
     #Configurability, allows the user to easily add filters and preprocessors.
     preprocessors = List(config=True,
         help="""List of preprocessors, by name or namespace, to enable.""")
 
-    _preprocessors = None
+    _preprocessors = List()
 
     default_preprocessors = List(['IPython.nbconvert.preprocessors.coalesce_streams',
                                   'IPython.nbconvert.preprocessors.SVG2PDFPreprocessor',
@@ -68,6 +70,8 @@ class Exporter(LoggingConfigurable):
                                   'IPython.nbconvert.preprocessors.CSSHTMLHeaderPreprocessor',
                                   'IPython.nbconvert.preprocessors.RevealHelpPreprocessor',
                                   'IPython.nbconvert.preprocessors.LatexPreprocessor',
+                                  'IPython.nbconvert.preprocessors.ClearOutputPreprocessor',
+                                  'IPython.nbconvert.preprocessors.ExecutePreprocessor',
                                   'IPython.nbconvert.preprocessors.HighlightMagicsPreprocessor'],
         config=True,
         help="""List of preprocessors available by default, by name, namespace, 
@@ -96,20 +100,25 @@ class Exporter(LoggingConfigurable):
     def default_config(self):
         return Config()
 
-
     def from_notebook_node(self, nb, resources=None, **kw):
         """
         Convert a notebook from a notebook node instance.
 
         Parameters
         ----------
-        nb : Notebook node
-        resources : dict (**kw)
-            of additional resources that can be accessed read/write by
-            preprocessors.
+        nb : :class:`~IPython.nbformat.current.NotebookNode`
+          Notebook node
+        resources : dict
+          Additional resources that can be accessed read/write by
+          preprocessors and filters.
+        **kw
+          Ignored (?)
         """
         nb_copy = copy.deepcopy(nb)
         resources = self._init_resources(resources)
+        
+        if 'language' in nb['metadata']:
+            resources['language'] = nb['metadata']['language'].lower()
 
         # Preprocess
         nb_copy, resources = self._preprocess(nb_copy, resources)
@@ -139,7 +148,7 @@ class Exporter(LoggingConfigurable):
         modified_date = datetime.datetime.fromtimestamp(os.path.getmtime(filename))
         resources['metadata']['modified_date'] = modified_date.strftime(text.date_format)
 
-        with io.open(filename) as f:
+        with io.open(filename, encoding='utf-8') as f:
             return self.from_notebook_node(nbformat.read(f, 'json'), resources=resources, **kw)
 
 
@@ -207,18 +216,15 @@ class Exporter(LoggingConfigurable):
         Register all of the preprocessors needed for this exporter, disabled
         unless specified explicitly.
         """
-        if self._preprocessors is None:
-            self._preprocessors = []
+        self._preprocessors = []
 
-        #Load default preprocessors (not necessarly enabled by default).
-        if self.default_preprocessors:
-            for preprocessor in self.default_preprocessors:
-                self.register_preprocessor(preprocessor)
+        # Load default preprocessors (not necessarly enabled by default).
+        for preprocessor in self.default_preprocessors:
+            self.register_preprocessor(preprocessor)
 
-        #Load user preprocessors.  Enable by default.
-        if self.preprocessors:
-            for preprocessor in self.preprocessors:
-                self.register_preprocessor(preprocessor, enabled=True)
+        # Load user-specified preprocessors.  Enable by default.
+        for preprocessor in self.preprocessors:
+            self.register_preprocessor(preprocessor, enabled=True)
 
 
     def _init_resources(self, resources):

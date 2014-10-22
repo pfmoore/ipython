@@ -1,12 +1,7 @@
-"""wrappers for stdout/stderr forwarding over zmq
-"""
+"""Wrappers for forwarding stdout/stderr over zmq"""
 
-#-----------------------------------------------------------------------------
-#  Copyright (C) 2013  The IPython Development Team
-#
-#  Distributed under the terms of the BSD License.  The full license is in
-#  the file COPYING, distributed as part of this software.
-#-----------------------------------------------------------------------------
+# Copyright (c) IPython Development Team.
+# Distributed under the terms of the Modified BSD License.
 
 import os
 import threading
@@ -15,11 +10,13 @@ import uuid
 from io import StringIO, UnsupportedOperation
 
 import zmq
+from zmq.eventloop.ioloop import IOLoop
 
 from .session import extract_header
 
 from IPython.utils import py3compat
 from IPython.utils.py3compat import unicode_type
+from IPython.utils.warn import warn
 
 #-----------------------------------------------------------------------------
 # Globals
@@ -65,9 +62,25 @@ class OutStream(object):
         
         self._pipe_in = ctx.socket(zmq.PULL)
         self._pipe_in.linger = 0
-        self._pipe_port = self._pipe_in.bind_to_random_port("tcp://127.0.0.1")
+        try:
+            self._pipe_port = self._pipe_in.bind_to_random_port("tcp://127.0.0.1")
+        except zmq.ZMQError as e:
+            warn("Couldn't bind IOStream to 127.0.0.1: %s" % e +
+                "\nsubprocess output will be unavailable."
+            )
+            self._pipe_flag = False
+            self._pipe_in.close()
+            del self._pipe_in
+            return
         self._pipe_poller = zmq.Poller()
         self._pipe_poller.register(self._pipe_in, zmq.POLLIN)
+        if IOLoop.initialized():
+            # subprocess flush should trigger flush
+            # if kernel is idle
+            IOLoop.instance().add_handler(self._pipe_in,
+                lambda s, event: self.flush(),
+                IOLoop.READ,
+            )
     
     def _setup_pipe_out(self):
         # must be new context after fork
@@ -89,7 +102,7 @@ class OutStream(object):
     def _check_mp_mode(self):
         """check for forks, and switch to zmq pipeline if necessary"""
         if not self._pipe_flag or self._is_master_process():
-                return MASTER
+            return MASTER
         else:
             if not self._have_pipe_out():
                 self._flush_buffer()
@@ -120,6 +133,17 @@ class OutStream(object):
             else:
                 break
     
+    def _schedule_flush(self):
+        """schedule a flush in the main thread
+        
+        only works with a tornado/pyzmq eventloop running
+        """
+        if IOLoop.initialized():
+            IOLoop.instance().add_callback(self.flush)
+        else:
+            # no async loop, at least force the timer
+            self._start = 0
+    
     def flush(self):
         """trigger actual zmq send"""
         if self.pub_socket is None:
@@ -130,16 +154,16 @@ class OutStream(object):
         if mp_mode != CHILD:
             # we are master
             if not self._is_master_thread():
-                # sub-threads must not trigger flush,
-                # but at least they can force the timer.
-                self._start = 0
+                # sub-threads must not trigger flush directly,
+                # but at least they can schedule an async flush, or force the timer.
+                self._schedule_flush()
                 return
             
             self._flush_from_subprocesses()
             data = self._flush_buffer()
             
             if data:
-                content = {u'name':self.name, u'data':data}
+                content = {u'name':self.name, u'text':data}
                 msg = self.session.send(self.pub_socket, u'stream', content=content,
                                        parent=self.parent_header, ident=self.topic)
             

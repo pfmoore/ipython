@@ -97,6 +97,7 @@ class ScriptMagics(Magics):
             'perl',
             'ruby',
             'python',
+            'python2',
             'python3',
             'pypy',
         ]
@@ -192,6 +193,8 @@ class ScriptMagics(Magics):
             else:
                 raise
         
+        if not cell.endswith('\n'):
+            cell += '\n'
         cell = cell.encode('utf8', 'replace')
         if args.bg:
             self.bg_processes.append(p)

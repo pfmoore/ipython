@@ -8,10 +8,10 @@ Using IPython for interactive work
    tutorial
    tips
    reference
+   magics
    shell
    qtconsole
-   notebook
-   nbconvert
-   public_server
 
+.. seealso::
 
+    :doc:`/notebook/index`

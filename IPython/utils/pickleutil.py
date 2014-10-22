@@ -1,19 +1,8 @@
 # encoding: utf-8
-
 """Pickle related utilities. Perhaps this should be called 'can'."""
 
-__docformat__ = "restructuredtext en"
-
-#-------------------------------------------------------------------------------
-#  Copyright (C) 2008-2011  The IPython Development Team
-#
-#  Distributed under the terms of the BSD License.  The full license is in
-#  the file COPYING, distributed as part of this software.
-#-------------------------------------------------------------------------------
-
-#-------------------------------------------------------------------------------
-# Imports
-#-------------------------------------------------------------------------------
+# Copyright (c) IPython Development Team.
+# Distributed under the terms of the Modified BSD License.
 
 import copy
 import logging
@@ -31,6 +20,7 @@ from .importstring import import_item
 from .py3compat import string_types, iteritems
 
 from IPython.config import Application
+from IPython.utils.log import get_logger
 
 if py3compat.PY3:
     buffer = memoryview
@@ -38,6 +28,71 @@ if py3compat.PY3:
 else:
     from types import ClassType
     class_type = (type, ClassType)
+
+try:
+    PICKLE_PROTOCOL = pickle.DEFAULT_PROTOCOL
+except AttributeError:
+    PICKLE_PROTOCOL = pickle.HIGHEST_PROTOCOL
+
+def _get_cell_type(a=None):
+    """the type of a closure cell doesn't seem to be importable,
+    so just create one
+    """
+    def inner():
+        return a
+    return type(py3compat.get_closure(inner)[0])
+
+cell_type = _get_cell_type()
+
+#-------------------------------------------------------------------------------
+# Functions
+#-------------------------------------------------------------------------------
+
+
+def use_dill():
+    """use dill to expand serialization support
+    
+    adds support for object methods and closures to serialization.
+    """
+    # import dill causes most of the magic
+    import dill
+    
+    # dill doesn't work with cPickle,
+    # tell the two relevant modules to use plain pickle
+    
+    global pickle
+    pickle = dill
+
+    try:
+        from IPython.kernel.zmq import serialize
+    except ImportError:
+        pass
+    else:
+        serialize.pickle = dill
+    
+    # disable special function handling, let dill take care of it
+    can_map.pop(FunctionType, None)
+
+def use_cloudpickle():
+    """use cloudpickle to expand serialization support
+    
+    adds support for object methods and closures to serialization.
+    """
+    from cloud.serialization import cloudpickle
+    
+    global pickle
+    pickle = cloudpickle
+
+    try:
+        from IPython.kernel.zmq import serialize
+    except ImportError:
+        pass
+    else:
+        serialize.pickle = cloudpickle
+    
+    # disable special function handling, let cloudpickle take care of it
+    can_map.pop(FunctionType, None)
+
 
 #-------------------------------------------------------------------------------
 # Classes
@@ -101,6 +156,18 @@ class Reference(CannedObject):
         return eval(self.name, g)
 
 
+class CannedCell(CannedObject):
+    """Can a closure cell"""
+    def __init__(self, cell):
+        self.cell_contents = can(cell.cell_contents)
+    
+    def get_object(self, g=None):
+        cell_contents = uncan(self.cell_contents, g)
+        def inner():
+            return cell_contents
+        return py3compat.get_closure(inner)[0]
+
+
 class CannedFunction(CannedObject):
 
     def __init__(self, f):
@@ -110,6 +177,13 @@ class CannedFunction(CannedObject):
             self.defaults = [ can(fd) for fd in f.__defaults__ ]
         else:
             self.defaults = None
+        
+        closure = py3compat.get_closure(f)
+        if closure:
+            self.closure = tuple( can(cell) for cell in closure )
+        else:
+            self.closure = None
+        
         self.module = f.__module__ or '__main__'
         self.__name__ = f.__name__
         self.buffers = []
@@ -129,7 +203,11 @@ class CannedFunction(CannedObject):
             defaults = tuple(uncan(cfd, g) for cfd in self.defaults)
         else:
             defaults = None
-        newFunc = FunctionType(self.code, g, self.__name__, defaults)
+        if self.closure:
+            closure = tuple(uncan(cell, g) for cell in self.closure)
+        else:
+            closure = None
+        newFunc = FunctionType(self.code, g, self.__name__, defaults, closure)
         return newFunc
 
 class CannedClass(CannedObject):
@@ -162,9 +240,17 @@ class CannedArray(CannedObject):
         from numpy import ascontiguousarray
         self.shape = obj.shape
         self.dtype = obj.dtype.descr if obj.dtype.fields else obj.dtype.str
+        self.pickled = False
         if sum(obj.shape) == 0:
+            self.pickled = True
+        elif obj.dtype == 'O':
+            # can't handle object dtype with buffer approach
+            self.pickled = True
+        elif obj.dtype.fields and any(dt == 'O' for dt,sz in obj.dtype.fields.values()):
+            self.pickled = True
+        if self.pickled:
             # just pickle it
-            self.buffers = [pickle.dumps(obj, -1)]
+            self.buffers = [pickle.dumps(obj, PICKLE_PROTOCOL)]
         else:
             # ensure contiguous
             obj = ascontiguousarray(obj, dtype=None)
@@ -173,7 +259,7 @@ class CannedArray(CannedObject):
     def get_object(self, g=None):
         from numpy import frombuffer
         data = self.buffers[0]
-        if sum(self.shape) == 0:
+        if self.pickled:
             # no shape, we just pickled it
             return pickle.loads(data)
         else:
@@ -196,25 +282,11 @@ def CannedBuffer(CannedBytes):
 # Functions
 #-------------------------------------------------------------------------------
 
-def _logger():
-    """get the logger for the current Application
-    
-    the root logger will be used if no Application is running
-    """
-    if Application.initialized():
-        logger = Application.instance().log
-    else:
-        logger = logging.getLogger()
-        if not logger.handlers:
-            logging.basicConfig()
-    
-    return logger
-
 def _import_mapping(mapping, original=None):
     """import any string-keys in a type mapping
     
     """
-    log = _logger()
+    log = get_logger()
     log.debug("Importing canning map")
     for key,value in list(mapping.items()):
         if isinstance(key, string_types):
@@ -340,6 +412,7 @@ can_map = {
     FunctionType : CannedFunction,
     bytes : CannedBytes,
     buffer : CannedBuffer,
+    cell_type : CannedCell,
     class_type : can_class,
 }
 

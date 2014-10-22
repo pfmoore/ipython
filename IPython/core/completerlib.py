@@ -1,3 +1,4 @@
+# encoding: utf-8
 """Implementations for various useful completers.
 
 These are all loaded by default by IPython.
@@ -17,11 +18,18 @@ from __future__ import print_function
 
 # Stdlib imports
 import glob
-import imp
 import inspect
 import os
 import re
 import sys
+
+try:
+    # Python >= 3.3
+    from importlib.machinery import all_suffixes
+    _suffixes = all_suffixes()
+except ImportError:
+    from imp import get_suffixes
+    _suffixes = [ s[0] for s in get_suffixes() ]
 
 # Third-party imports
 from time import time
@@ -51,10 +59,10 @@ TIMEOUT_GIVEUP = 20
 import_re = re.compile(r'(?P<name>[a-zA-Z_][a-zA-Z0-9_]*?)'
                        r'(?P<package>[/\\]__init__)?'
                        r'(?P<suffix>%s)$' %
-                       r'|'.join(re.escape(s[0]) for s in imp.get_suffixes()))
+                       r'|'.join(re.escape(s) for s in _suffixes))
 
 # RE for the ipython %run command (python + ipython scripts)
-magic_run_re = re.compile(r'.*(\.ipy|\.py[w]?)$')
+magic_run_re = re.compile(r'.*(\.ipy|\.ipynb|\.py[w]?)$')
 
 #-----------------------------------------------------------------------------
 # Local utilities
@@ -77,7 +85,7 @@ def module_list(path):
         # in its subdirectories. For performance reasons, do not
         # recurse more than one level into subdirectories.
         files = []
-        for root, dirs, nondirs in os.walk(path):
+        for root, dirs, nondirs in os.walk(path, followlinks=True):
             subdir = root[len(path)+1:]
             if subdir:
                 files.extend(pjoin(subdir, f) for f in nondirs)
@@ -250,10 +258,14 @@ def module_completer(self,event):
 # completers, that is currently reimplemented in each.
 
 def magic_run_completer(self, event):
-    """Complete files that end in .py or .ipy for the %run command.
+    """Complete files that end in .py or .ipy or .ipynb for the %run command.
     """
     comps = arg_split(event.line, strict=False)
-    relpath = (len(comps) > 1 and comps[-1] or '').strip("'\"")
+    # relpath should be the current token that we need to complete.
+    if (len(comps) > 1) and (not event.line.endswith(' ')):
+        relpath = comps[-1].strip("'\"")
+    else:
+        relpath = ''
 
     #print("\nev=", event)  # dbg
     #print("rp=", relpath)  # dbg
@@ -263,20 +275,23 @@ def magic_run_completer(self, event):
     isdir = os.path.isdir
     relpath, tilde_expand, tilde_val = expand_user(relpath)
 
-    dirs = [f.replace('\\','/') + "/" for f in lglob(relpath+'*') if isdir(f)]
-
     # Find if the user has already typed the first filename, after which we
     # should complete on all files, since after the first one other files may
     # be arguments to the input script.
 
     if any(magic_run_re.match(c) for c in comps):
-        pys =  [f.replace('\\','/') for f in lglob('*')]
+        matches =  [f.replace('\\','/') + ('/' if isdir(f) else '')
+                            for f in lglob(relpath+'*')]
     else:
+        dirs = [f.replace('\\','/') + "/" for f in lglob(relpath+'*') if isdir(f)]
         pys =  [f.replace('\\','/')
                 for f in lglob(relpath+'*.py') + lglob(relpath+'*.ipy') +
-                lglob(relpath + '*.pyw')]
+                lglob(relpath+'*.ipynb') + lglob(relpath + '*.pyw')]
+
+        matches = dirs + pys
+
     #print('run comp:', dirs+pys) # dbg
-    return [compress_user(p, tilde_expand, tilde_val) for p in dirs+pys]
+    return [compress_user(p, tilde_expand, tilde_val) for p in matches]
 
 
 def cd_completer(self, event):

@@ -5,36 +5,28 @@ Inheritance diagram:
 
 .. inheritance-diagram:: IPython.core.formatters
    :parts: 3
-
-Authors:
-
-* Robert Kern
-* Brian Granger
 """
-#-----------------------------------------------------------------------------
-# Copyright (C) 2010-2011, IPython Development Team.
-#
+
+# Copyright (c) IPython Development Team.
 # Distributed under the terms of the Modified BSD License.
-#
-# The full license is in the file COPYING.txt, distributed with this software.
-#-----------------------------------------------------------------------------
 
-#-----------------------------------------------------------------------------
-# Imports
-#-----------------------------------------------------------------------------
-
-# Stdlib imports
 import abc
+import inspect
 import sys
+import types
 import warnings
 
-# Our own imports
+from IPython.external.decorator import decorator
+
 from IPython.config.configurable import Configurable
+from IPython.core.getipython import get_ipython
 from IPython.lib import pretty
 from IPython.utils.traitlets import (
     Bool, Dict, Integer, Unicode, CUnicode, ObjectName, List,
 )
-from IPython.utils.py3compat import unicode_to_str, with_metaclass, PY3
+from IPython.utils.py3compat import (
+    unicode_to_str, with_metaclass, PY3, string_types, unicode_type,
+)
 
 if PY3:
     from io import StringIO
@@ -45,6 +37,41 @@ else:
 #-----------------------------------------------------------------------------
 # The main DisplayFormatter class
 #-----------------------------------------------------------------------------
+
+
+def _valid_formatter(f):
+    """Return whether an object is a valid formatter
+    
+    Cases checked:
+    
+    - bound methods             OK
+    - unbound methods           NO
+    - callable with zero args   OK
+    """
+    if f is None:
+        return False
+    elif isinstance(f, type(str.find)):
+        # unbound methods on compiled classes have type method_descriptor
+        return False
+    elif isinstance(f, types.BuiltinFunctionType):
+        # bound methods on compiled classes have type builtin_function
+        return True
+    elif callable(f):
+        # anything that works with zero args should be okay
+        try:
+            inspect.getcallargs(f)
+        except Exception:
+            return False
+        else:
+            return True
+    return False
+
+def _safe_get_formatter_method(obj, name):
+    """Safely get a formatter method"""
+    method = pretty._safe_getattr(obj, name, None)
+    # formatter methods must be bound
+    if _valid_formatter(method):
+        return method
 
 
 class DisplayFormatter(Configurable):
@@ -86,8 +113,10 @@ class DisplayFormatter(Configurable):
         formatter_classes = [
             PlainTextFormatter,
             HTMLFormatter,
+            MarkdownFormatter,
             SVGFormatter,
             PNGFormatter,
+            PDFFormatter,
             JPEGFormatter,
             LatexFormatter,
             JSONFormatter,
@@ -108,9 +137,11 @@ class DisplayFormatter(Configurable):
 
         * text/plain
         * text/html
+        * text/markdown
         * text/latex
         * application/json
         * application/javascript
+        * application/pdf
         * image/png
         * image/jpeg
         * image/svg+xml
@@ -179,6 +210,47 @@ class DisplayFormatter(Configurable):
 #-----------------------------------------------------------------------------
 
 
+def _safe_repr(obj):
+    """Try to return a repr of an object
+
+    always returns a string, at least.
+    """
+    try:
+        return repr(obj)
+    except Exception as e:
+        return "un-repr-able object (%r)" % e
+
+
+class FormatterWarning(UserWarning):
+    """Warning class for errors in formatters"""
+
+@decorator
+def warn_format_error(method, self, *args, **kwargs):
+    """decorator for warning on failed format call"""
+    try:
+        r = method(self, *args, **kwargs)
+    except NotImplementedError as e:
+        # don't warn on NotImplementedErrors
+        return None
+    except Exception:
+        exc_info = sys.exc_info()
+        ip = get_ipython()
+        if ip is not None:
+            ip.showtraceback(exc_info)
+        else:
+            traceback.print_exception(*exc_info)
+        return None
+    if r is None or isinstance(r, self._return_type) or \
+        (isinstance(r, tuple) and r and isinstance(r[0], self._return_type)):
+        return r
+    else:
+        warnings.warn(
+            "%s formatter returned invalid type %s (expected %s) for object: %s" % \
+            (self.format_type, type(r), self._return_type, _safe_repr(args[0])),
+            FormatterWarning
+        )
+
+
 class FormatterABC(with_metaclass(abc.ABCMeta, object)):
     """ Abstract base class for Formatters.
 
@@ -193,17 +265,33 @@ class FormatterABC(with_metaclass(abc.ABCMeta, object)):
 
     # Is the formatter enabled...
     enabled = True
-
+    
     @abc.abstractmethod
+    @warn_format_error
     def __call__(self, obj):
         """Return a JSON'able representation of the object.
 
-        If the object cannot be formatted by this formatter, then return None
+        If the object cannot be formatted by this formatter,
+        warn and return None.
         """
-        try:
-            return repr(obj)
-        except Exception:
-            return None
+        return repr(obj)
+
+
+def _mod_name_key(typ):
+    """Return a (__module__, __name__) tuple for a type.
+    
+    Used as key in Formatter.deferred_printers.
+    """
+    module = getattr(typ, '__module__', None)
+    name = getattr(typ, '__name__', None)
+    return (module, name)
+
+
+def _get_type(obj):
+    """Return the type of an instance (old and new-style)"""
+    return getattr(obj, '__class__', None) or type(obj)
+
+_raise_key_error = object()
 
 
 class BaseFormatter(Configurable):
@@ -232,6 +320,7 @@ class BaseFormatter(Configurable):
     """
 
     format_type = Unicode('text/plain')
+    _return_type = string_types
 
     enabled = Bool(True, config=True)
 
@@ -240,74 +329,140 @@ class BaseFormatter(Configurable):
     # The singleton printers.
     # Maps the IDs of the builtin singleton objects to the format functions.
     singleton_printers = Dict(config=True)
-    def _singleton_printers_default(self):
-        return {}
 
     # The type-specific printers.
     # Map type objects to the format functions.
     type_printers = Dict(config=True)
-    def _type_printers_default(self):
-        return {}
 
     # The deferred-import type-specific printers.
     # Map (modulename, classname) pairs to the format functions.
     deferred_printers = Dict(config=True)
-    def _deferred_printers_default(self):
-        return {}
-
+    
+    @warn_format_error
     def __call__(self, obj):
         """Compute the format for an object."""
         if self.enabled:
-            obj_id = id(obj)
+            # lookup registered printer
             try:
-                obj_class = getattr(obj, '__class__', None) or type(obj)
-                # First try to find registered singleton printers for the type.
-                try:
-                    printer = self.singleton_printers[obj_id]
-                except (TypeError, KeyError):
-                    pass
-                else:
-                    return printer(obj)
-                # Next look for type_printers.
-                for cls in pretty._get_mro(obj_class):
-                    if cls in self.type_printers:
-                        return self.type_printers[cls](obj)
-                    else:
-                        printer = self._in_deferred_types(cls)
-                        if printer is not None:
-                            return printer(obj)
-                # Finally look for special method names.
-                if hasattr(obj_class, self.print_method):
-                    printer = getattr(obj_class, self.print_method)
-                    return printer(obj)
-                return None
-            except Exception:
+                printer = self.lookup(obj)
+            except KeyError:
                 pass
+            else:
+                return printer(obj)
+            # Finally look for special method names
+            method = _safe_get_formatter_method(obj, self.print_method)
+            if method is not None:
+                return method()
+            return None
         else:
             return None
+    
+    def __contains__(self, typ):
+        """map in to lookup_by_type"""
+        try:
+            self.lookup_by_type(typ)
+        except KeyError:
+            return False
+        else:
+            return True
+    
+    def lookup(self, obj):
+        """Look up the formatter for a given instance.
+        
+        Parameters
+        ----------
+        obj  : object instance
 
-    def for_type(self, typ, func):
-        """Add a format function for a given type.
+        Returns
+        -------
+        f : callable
+            The registered formatting callable for the type.
+
+        Raises
+        ------
+        KeyError if the type has not been registered.
+        """
+        # look for singleton first
+        obj_id = id(obj)
+        if obj_id in self.singleton_printers:
+            return self.singleton_printers[obj_id]
+        # then lookup by type
+        return self.lookup_by_type(_get_type(obj))
+    
+    def lookup_by_type(self, typ):
+        """Look up the registered formatter for a type.
 
         Parameters
+        ----------
+        typ  : type or '__module__.__name__' string for a type
+
+        Returns
+        -------
+        f : callable
+            The registered formatting callable for the type.
+
+        Raises
+        ------
+        KeyError if the type has not been registered.
+        """
+        if isinstance(typ, string_types):
+            typ_key = tuple(typ.rsplit('.',1))
+            if typ_key not in self.deferred_printers:
+                # We may have it cached in the type map. We will have to
+                # iterate over all of the types to check.
+                for cls in self.type_printers:
+                    if _mod_name_key(cls) == typ_key:
+                        return self.type_printers[cls]
+            else:
+                return self.deferred_printers[typ_key]
+        else:
+            for cls in pretty._get_mro(typ):
+                if cls in self.type_printers or self._in_deferred_types(cls):
+                    return self.type_printers[cls]
+        
+        # If we have reached here, the lookup failed.
+        raise KeyError("No registered printer for {0!r}".format(typ))
+
+    def for_type(self, typ, func=None):
+        """Add a format function for a given type.
+        
+        Parameters
         -----------
-        typ : class
+        typ : type or '__module__.__name__' string for a type
             The class of the object that will be formatted using `func`.
         func : callable
-            The callable that will be called to compute the format data. The
-            call signature of this function is simple, it must take the
-            object to be formatted and return the raw data for the given
-            format. Subclasses may use a different call signature for the
+            A callable for computing the format data.
+            `func` will be called with the object to be formatted,
+            and will return the raw data in this formatter's format.
+            Subclasses may use a different call signature for the
             `func` argument.
+            
+            If `func` is None or not specified, there will be no change,
+            only returning the current value.
+        
+        Returns
+        -------
+        oldfunc : callable
+            The currently registered callable.
+            If you are registering a new formatter,
+            this will be the previous value (to enable restoring later).
         """
-        oldfunc = self.type_printers.get(typ, None)
+        # if string given, interpret as 'pkg.module.class_name'
+        if isinstance(typ, string_types):
+            type_module, type_name = typ.rsplit('.', 1)
+            return self.for_type_by_name(type_module, type_name, func)
+        
+        try:
+            oldfunc = self.lookup_by_type(typ)
+        except KeyError:
+            oldfunc = None
+        
         if func is not None:
-            # To support easy restoration of old printers, we need to ignore
-            # Nones.
             self.type_printers[typ] = func
+        
         return oldfunc
 
-    def for_type_by_name(self, type_module, type_name, func):
+    def for_type_by_name(self, type_module, type_name, func=None):
         """Add a format function for a type specified by the full dotted
         module and name of the type, rather than the type of the object.
 
@@ -319,37 +474,89 @@ class BaseFormatter(Configurable):
         type_name : str
             The name of the type (the class name), like ``dtype``
         func : callable
-            The callable that will be called to compute the format data. The
-            call signature of this function is simple, it must take the
-            object to be formatted and return the raw data for the given
-            format. Subclasses may use a different call signature for the
+            A callable for computing the format data.
+            `func` will be called with the object to be formatted,
+            and will return the raw data in this formatter's format.
+            Subclasses may use a different call signature for the
             `func` argument.
+            
+            If `func` is None or unspecified, there will be no change,
+            only returning the current value.
+        
+        Returns
+        -------
+        oldfunc : callable
+            The currently registered callable.
+            If you are registering a new formatter,
+            this will be the previous value (to enable restoring later).
         """
         key = (type_module, type_name)
-        oldfunc = self.deferred_printers.get(key, None)
+        
+        try:
+            oldfunc = self.lookup_by_type("%s.%s" % key)
+        except KeyError:
+            oldfunc = None
+        
         if func is not None:
-            # To support easy restoration of old printers, we need to ignore
-            # Nones.
             self.deferred_printers[key] = func
         return oldfunc
+    
+    def pop(self, typ, default=_raise_key_error):
+        """Pop a formatter for the given type.
+
+        Parameters
+        ----------
+        typ : type or '__module__.__name__' string for a type
+        default : object
+            value to be returned if no formatter is registered for typ.
+
+        Returns
+        -------
+        obj : object
+            The last registered object for the type.
+
+        Raises
+        ------
+        KeyError if the type is not registered and default is not specified.
+        """
+        
+        if isinstance(typ, string_types):
+            typ_key = tuple(typ.rsplit('.',1))
+            if typ_key not in self.deferred_printers:
+                # We may have it cached in the type map. We will have to
+                # iterate over all of the types to check.
+                for cls in self.type_printers:
+                    if _mod_name_key(cls) == typ_key:
+                        old = self.type_printers.pop(cls)
+                        break
+                else:
+                    old = default
+            else:
+                old = self.deferred_printers.pop(typ_key)
+        else:
+            if typ in self.type_printers:
+                old = self.type_printers.pop(typ)
+            else:
+                old = self.deferred_printers.pop(_mod_name_key(typ), default)
+        if old is _raise_key_error:
+            raise KeyError("No registered value for {0!r}".format(typ))
+        return old
 
     def _in_deferred_types(self, cls):
         """
         Check if the given class is specified in the deferred type registry.
 
-        Returns the printer from the registry if it exists, and None if the
-        class is not in the registry. Successful matches will be moved to the
-        regular type registry for future use.
+        Successful matches will be moved to the regular type registry for future use.
         """
         mod = getattr(cls, '__module__', None)
         name = getattr(cls, '__name__', None)
         key = (mod, name)
-        printer = None
         if key in self.deferred_printers:
             # Move the printer over to the regular registry.
             printer = self.deferred_printers.pop(key)
             self.type_printers[cls] = printer
-        return printer
+            return True
+        return False
 
 
 class PlainTextFormatter(BaseFormatter):
@@ -462,10 +669,11 @@ class PlainTextFormatter(BaseFormatter):
 
     #### FormatterABC interface ####
 
+    @warn_format_error
     def __call__(self, obj):
         """Compute the pretty representation of the object."""
         if not self.pprint:
-            return pretty._safe_repr(obj)
+            return repr(obj)
         else:
             # This uses use StringIO, as cStringIO doesn't handle unicode.
             stream = StringIO()
@@ -499,6 +707,20 @@ class HTMLFormatter(BaseFormatter):
     print_method = ObjectName('_repr_html_')
 
 
+class MarkdownFormatter(BaseFormatter):
+    """A Markdown formatter.
+
+    To define the callables that compute the Markdown representation of your
+    objects, define a :meth:`_repr_markdown_` method or use the :meth:`for_type`
+    or :meth:`for_type_by_name` methods to register functions that handle
+    this.
+
+    The return value of this formatter should be a valid Markdown.
+    """
+    format_type = Unicode('text/markdown')
+
+    print_method = ObjectName('_repr_markdown_')
+
 class SVGFormatter(BaseFormatter):
     """An SVG formatter.
 
@@ -530,6 +752,8 @@ class PNGFormatter(BaseFormatter):
     format_type = Unicode('image/png')
 
     print_method = ObjectName('_repr_png_')
+    
+    _return_type = (bytes, unicode_type)
 
 
 class JPEGFormatter(BaseFormatter):
@@ -546,6 +770,8 @@ class JPEGFormatter(BaseFormatter):
     format_type = Unicode('image/jpeg')
 
     print_method = ObjectName('_repr_jpeg_')
+
+    _return_type = (bytes, unicode_type)
 
 
 class LatexFormatter(BaseFormatter):
@@ -595,11 +821,32 @@ class JavascriptFormatter(BaseFormatter):
 
     print_method = ObjectName('_repr_javascript_')
 
+
+class PDFFormatter(BaseFormatter):
+    """A PDF formatter.
+
+    To define the callables that compute the PDF representation of your
+    objects, define a :meth:`_repr_pdf_` method or use the :meth:`for_type`
+    or :meth:`for_type_by_name` methods to register functions that handle
+    this.
+
+    The return value of this formatter should be raw PDF data, *not*
+    base64 encoded.
+    """
+    format_type = Unicode('application/pdf')
+
+    print_method = ObjectName('_repr_pdf_')
+
+    _return_type = (bytes, unicode_type)
+
+
 FormatterABC.register(BaseFormatter)
 FormatterABC.register(PlainTextFormatter)
 FormatterABC.register(HTMLFormatter)
+FormatterABC.register(MarkdownFormatter)
 FormatterABC.register(SVGFormatter)
 FormatterABC.register(PNGFormatter)
+FormatterABC.register(PDFFormatter)
 FormatterABC.register(JPEGFormatter)
 FormatterABC.register(LatexFormatter)
 FormatterABC.register(JSONFormatter)
@@ -615,9 +862,11 @@ def format_display_data(obj, include=None, exclude=None):
 
     * text/plain
     * text/html
+    * text/markdown
     * text/latex
     * application/json
     * application/javascript
+    * application/pdf
     * image/png
     * image/jpeg
     * image/svg+xml

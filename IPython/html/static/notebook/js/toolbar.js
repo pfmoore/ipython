@@ -1,30 +1,21 @@
-//----------------------------------------------------------------------------
-//  Copyright (C) 2008 The IPython Development Team
-//
-//  Distributed under the terms of the BSD License.  The full license is in
-//  the file COPYING, distributed as part of this software.
-//----------------------------------------------------------------------------
+// Copyright (c) IPython Development Team.
+// Distributed under the terms of the Modified BSD License.
 
-//============================================================================
-// ToolBar
-//============================================================================
-/**
- * @module IPython
- * @namespace IPython
- * @submodule ToolBar
- */
-
-var IPython = (function (IPython) {
+define([
+    'base/js/namespace',
+    'jquery',
+], function(IPython, $) {
     "use strict";
 
     /**
      * A generic toolbar on which one can add button
      * @class ToolBar
      * @constructor
-     * @param {Dom object} selector
+     * @param {Dom_object} selector
      */
-    var ToolBar = function (selector) {
+    var ToolBar = function (selector, layout_manager) {
         this.selector = selector;
+        this.layout_manager = layout_manager;
         if (this.selector !== undefined) {
             this.element = $(selector);
             this.style();
@@ -65,20 +56,22 @@ var IPython = (function (IPython) {
      */
     ToolBar.prototype.add_buttons_group = function (list, group_id) {
         var btn_group = $('<div/>').addClass("btn-group");
-        if( group_id != undefined ) {
+        if( group_id !== undefined ) {
             btn_group.attr('id',group_id);
         }
-        for(var el in list) {
+        var el;
+        for(var i=0; i < list.length; i++) {
+            el = list[i];
             var button  = $('<button/>')
-                .addClass('btn')
-                .attr("title", list[el].label)
+                .addClass('btn btn-default')
+                .attr("title", el.label)
                 .append(
-                    $("<i/>").addClass(list[el].icon)
+                    $("<i/>").addClass(el.icon).addClass('fa')
                 );
-            var id = list[el].id;
-            if( id != undefined )
+            var id = el.id;
+            if( id !== undefined )
                 button.attr('id',id);
-            var fun = list[el].callback;
+            var fun = el.callback;
             button.click(fun);
             btn_group.append(button);
         }
@@ -86,8 +79,7 @@ var IPython = (function (IPython) {
     };
 
     ToolBar.prototype.style = function () {
-        this.element.addClass('border-box-sizing')
-            .addClass('toolbar');
+        this.element.addClass('toolbar');
     };
 
     /**
@@ -96,14 +88,13 @@ var IPython = (function (IPython) {
      */
     ToolBar.prototype.toggle = function () {
         this.element.toggle();
-        if (IPython.layout_manager != undefined) {
-            IPython.layout_manager.do_resize();
+        if (this.layout_manager !== undefined) {
+            this.layout_manager.do_resize();
         }
     };
 
-
+    // Backwards compatibility.
     IPython.ToolBar = ToolBar;
 
-    return IPython;
-
-}(IPython));
+    return {'ToolBar': ToolBar};
+});

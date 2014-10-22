@@ -261,6 +261,7 @@ class ProfileCreate(BaseIPythonApplication):
         from IPython.terminal.ipapp import TerminalIPythonApp
         apps = [TerminalIPythonApp]
         for app_path in (
+            'IPython.kernel.zmq.kernelapp.IPKernelApp',
             'IPython.qt.console.qtconsoleapp.IPythonQtConsoleApp',
             'IPython.html.notebookapp.NotebookApp',
             'IPython.nbconvert.nbconvertapp.NbConvertApp',
@@ -285,8 +286,8 @@ class ProfileCreate(BaseIPythonApplication):
             app.log = self.log
             app.overwrite = self.overwrite
             app.copy_config_files=True
-            app.profile = self.profile
-            app.init_profile_dir()
+            app.ipython_dir=self.ipython_dir
+            app.profile_dir=self.profile_dir
             app.init_config_files()
 
     def stage_default_config_file(self):
@@ -294,7 +295,7 @@ class ProfileCreate(BaseIPythonApplication):
 
 
 class ProfileApp(Application):
-    name = u'ipython-profile'
+    name = u'ipython profile'
     description = profile_help
     examples = _main_examples
 

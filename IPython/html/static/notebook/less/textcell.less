@@ -1,12 +1,12 @@
 div.text_cell {
-    padding: 5px 5px 5px 5px;
+    padding: 5px 5px 5px 0px;
+    .hbox();
 }
-
-div.text_cell_input {
-    color: @textColor;
-    border: 1px solid @light_border_color;
-    .corner-all;
-    background: @cell_background;
+@media (max-width: 480px) {
+    // remove prompt indentation on small screens
+    div.text_cell > div.prompt {
+        display: none;
+    }
 }
 
 div.text_cell_render {
@@ -15,8 +15,9 @@ div.text_cell_render {
     resize: none;
     width:  inherit;
     border-style: none;
-    padding: 5px;
-    color: @textColor;
+    padding: 0.5em 0.5em 0.5em @code_padding;
+    color: @text-color;
+    .border-box-sizing();
 }
 
 a.anchor-link:link {
@@ -29,4 +30,40 @@ h1,h2,h3,h4,h5,h6 {
     &:hover .anchor-link {
         visibility: visible;
     }
+}
+
+div.cell.text_cell.rendered {
+    padding: 0px;
+}
+
+
+.text_cell.rendered .input_area {
+    display: none;
+}
+
+.text_cell.unrendered .text_cell_render {
+    display:none;
+}
+
+.cm-s-heading-1,
+.cm-s-heading-2,
+.cm-s-heading-3,
+.cm-s-heading-4,
+.cm-s-heading-5,
+.cm-s-heading-6 {
+    font-weight: bold;
+    font-family: @font-family-sans-serif;
+}
+
+.cm-s-heading-1 { font-size:150%; }
+.cm-s-heading-2 { font-size: 130%; }
+.cm-s-heading-3 { font-size: 120%; }
+.cm-s-heading-4 { font-size: 110%; }
+.cm-s-heading-5 {
+    font-size: 100%; 
+    font-style: italic;
+}
+.cm-s-heading-6 {
+    font-size: 90%; 
+    font-style: italic;
 }

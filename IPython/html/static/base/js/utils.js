@@ -1,17 +1,40 @@
-//----------------------------------------------------------------------------
-//  Copyright (C) 2008-2012  The IPython Development Team
-//
-//  Distributed under the terms of the BSD License.  The full license is in
-//  the file COPYING, distributed as part of this software.
-//----------------------------------------------------------------------------
+// Copyright (c) IPython Development Team.
+// Distributed under the terms of the Modified BSD License.
 
-//============================================================================
-// Utilities
-//============================================================================
-IPython.namespace('IPython.utils');
-
-IPython.utils = (function (IPython) {
+define([
+    'base/js/namespace',
+    'jquery',
+    'codemirror/lib/codemirror',
+], function(IPython, $, CodeMirror){
     "use strict";
+    
+    IPython.load_extensions = function () {
+        // load one or more IPython notebook extensions with requirejs
+        
+        var extensions = [];
+        var extension_names = arguments;
+        for (var i = 0; i < extension_names.length; i++) {
+            extensions.push("nbextensions/" + arguments[i]);
+        }
+        
+        require(extensions,
+            function () {
+                for (var i = 0; i < arguments.length; i++) {
+                    var ext = arguments[i];
+                    var ext_name = extension_names[i];
+                    // success callback
+                    console.log("Loaded extension: " + ext_name);
+                    if (ext && ext.load_ipython_extension !== undefined) {
+                        ext.load_ipython_extension();
+                    }
+                }
+            },
+            function (err) {
+                // failure callback
+                console.log("Failed to load extension(s):", err.requireModules, err);
+            }
+        );
+    };
 
     //============================================================================
     // Cross-browser RegEx Split
@@ -262,27 +285,36 @@ IPython.utils = (function (IPython) {
     function ansispan(str) {
         // ansispan function adapted from github.com/mmalecki/ansispan (MIT License)
         // regular ansi escapes (using the table above)
+        var is_open = false
         return str.replace(/\033\[(0?[01]|22|39)?([;\d]+)?m/g, function(match, prefix, pattern) {
             if (!pattern) {
                 // [(01|22|39|)m close spans
-                return "</span>";
+                if (is_open) {
+                    is_open = false;
+                    return "</span>";
+                } else {
+                    return "";
+                }
+            } else {
+                is_open = true;
+
+                // consume sequence of color escapes
+                var numbers = pattern.match(/\d+/g);
+                var attrs = {};
+                while (numbers.length > 0) {
+                    _process_numbers(attrs, numbers);
+                }
+
+                var span = "<span ";
+                for (var attr in attrs) {
+                    var value = attrs[attr];
+                    span = span + " " + attr + '="' + attrs[attr] + '"';
+                }
+                return span + ">";
             }
-            // consume sequence of color escapes
-            var numbers = pattern.match(/\d+/g);
-            var attrs = {};
-            while (numbers.length > 0) {
-                _process_numbers(attrs, numbers);
-            }
-            
-            var span = "<span ";
-            for (var attr in attrs) {
-                var value = attrs[attr];
-                span = span + " " + attr + '="' + attrs[attr] + '"';
-            }
-            return span + ">";
         });
     };
-    
+
     // Transform ANSI color escape codes into HTML <span> tags with css
     // classes listed in the above ansi_colormap object. The actual color used
     // are set in the css file.
@@ -322,66 +354,6 @@ IPython.utils = (function (IPython) {
             "$1<a target=\"_blank\" href=\"$2$3\">$2$3</a>");
     }
 
-    // some keycodes that seem to be platform/browser independent
-    var keycodes = {
-                BACKSPACE:  8,
-                TAB      :  9,
-                ENTER    : 13,
-                SHIFT    : 16,
-                CTRL     : 17,
-                CONTROL  : 17,
-                ALT      : 18,
-                CAPS_LOCK: 20,
-                ESC      : 27,
-                SPACE    : 32,
-                PGUP     : 33,
-                PGDOWN   : 34,
-                END      : 35,
-                HOME     : 36,
-                LEFT_ARROW: 37,
-                LEFTARROW: 37,
-                LEFT     : 37,
-                UP_ARROW : 38,
-                UPARROW  : 38,
-                UP       : 38,
-                RIGHT_ARROW:39,
-                RIGHTARROW:39,
-                RIGHT    : 39,
-                DOWN_ARROW: 40,
-                DOWNARROW: 40,
-                DOWN     : 40,
-                I        : 73,
-                M        : 77,
-                // all three of these keys may be COMMAND on OS X:
-                LEFT_SUPER : 91,
-                RIGHT_SUPER : 92,
-                COMMAND  : 93,
-    };
-    
-    // trigger a key press event
-    var press = function (key) {
-        var key_press =  $.Event('keydown', {which: key});
-        $(document).trigger(key_press);
-    }
-
-    var press_up = function() { press(keycodes.UP); };
-    var press_down = function() { press(keycodes.DOWN); };
-
-    var press_ctrl_enter = function() {
-        $(document).trigger($.Event('keydown', {which: keycodes.ENTER, ctrlKey: true}));
-    };
-
-    var press_shift_enter = function() {
-        $(document).trigger($.Event('keydown', {which: keycodes.ENTER, shiftKey: true}));
-    };
-
-    // trigger the ctrl-m shortcut followed by one of our keys
-    var press_ghetto = function(key) {
-        $(document).trigger($.Event('keydown', {which: keycodes.M, ctrlKey: true}));
-        press(key);
-    };
-
-
     var points_to_pixels = function (points) {
         // A reasonably good way of converting between points and pixels.
         var test = $('<div style="display: none; width: 10000pt; padding:0; border:0;"></div>');
@@ -403,7 +375,6 @@ IPython.utils = (function (IPython) {
         };
     };
 
-
     var url_path_join = function () {
         // join a sequence of url components with '/'
         var url = '';
@@ -417,7 +388,34 @@ IPython.utils = (function (IPython) {
                 url = url + arguments[i];
             }
         }
+        url = url.replace(/\/\/+/, '/');
         return url;
+    };
+    
+    var parse_url = function (url) {
+        // an `a` element with an href allows attr-access to the parsed segments of a URL
+        // a = parse_url("http://localhost:8888/path/name#hash")
+        // a.protocol = "http:"
+        // a.host     = "localhost:8888"
+        // a.hostname = "localhost"
+        // a.port     = 8888
+        // a.pathname = "/path/name"
+        // a.hash     = "#hash"
+        var a = document.createElement("a");
+        a.href = url;
+        return a;
+    };
+    
+    var encode_uri_components = function (uri) {
+        // encode just the components of a multi-segment uri,
+        // leaving '/' separators
+        return uri.split('/').map(encodeURIComponent).join('/');
+    };
+    
+    var url_join_encode = function () {
+        // join a sequence of url components with '/',
+        // encoding each component with encodeURIComponent
+        return encode_uri_components(url_path_join.apply(null, arguments));
     };
 
 
@@ -430,38 +428,170 @@ IPython.utils = (function (IPython) {
         } else {
             return [filename, ''];
         }
-    }
+    };
 
 
+    var escape_html = function (text) {
+        // escape text to HTML
+        return $("<div/>").text(text).html();
+    };
+
+
+    var get_body_data = function(key) {
+        // get a url-encoded item from body.data and decode it
+        // we should never have any encoded URLs anywhere else in code
+        // until we are building an actual request
+        return decodeURIComponent($('body').data(key));
+    };
+    
+    var to_absolute_cursor_pos = function (cm, cursor) {
+        // get the absolute cursor position from CodeMirror's col, ch
+        if (!cursor) {
+            cursor = cm.getCursor();
+        }
+        var cursor_pos = cursor.ch;
+        for (var i = 0; i < cursor.line; i++) {
+            cursor_pos += cm.getLine(i).length + 1;
+        }
+        return cursor_pos;
+    };
+    
+    var from_absolute_cursor_pos = function (cm, cursor_pos) {
+        // turn absolute cursor postion into CodeMirror col, ch cursor
+        var i, line;
+        var offset = 0;
+        for (i = 0, line=cm.getLine(i); line !== undefined; i++, line=cm.getLine(i)) {
+            if (offset + line.length < cursor_pos) {
+                offset += line.length + 1;
+            } else {
+                return {
+                    line : i,
+                    ch : cursor_pos - offset,
+                };
+            }
+        }
+        // reached end, return endpoint
+        return {
+            ch : line.length - 1,
+            line : i - 1,
+        };
+    };
+    
     // http://stackoverflow.com/questions/2400935/browser-detection-in-javascript
     var browser = (function() {
+        if (typeof navigator === 'undefined') {
+            // navigator undefined in node
+            return 'None';
+        }
         var N= navigator.appName, ua= navigator.userAgent, tem;
         var M= ua.match(/(opera|chrome|safari|firefox|msie)\/?\s*(\.?\d+(\.\d+)*)/i);
-        if (M && (tem= ua.match(/version\/([\.\d]+)/i))!= null) M[2]= tem[1];
+        if (M && (tem= ua.match(/version\/([\.\d]+)/i)) !== null) M[2]= tem[1];
         M= M? [M[1], M[2]]: [N, navigator.appVersion,'-?'];
         return M;
     })();
 
+    // http://stackoverflow.com/questions/11219582/how-to-detect-my-browser-version-and-operating-system-using-javascript
+    var platform = (function () {
+        if (typeof navigator === 'undefined') {
+            // navigator undefined in node
+            return 'None';
+        }
+        var OSName="None";
+        if (navigator.appVersion.indexOf("Win")!=-1) OSName="Windows";
+        if (navigator.appVersion.indexOf("Mac")!=-1) OSName="MacOS";
+        if (navigator.appVersion.indexOf("X11")!=-1) OSName="UNIX";
+        if (navigator.appVersion.indexOf("Linux")!=-1) OSName="Linux";
+        return OSName;
+    })();
 
-    return {
+    var is_or_has = function (a, b) {
+        // Is b a child of a or a itself?
+        return a.has(b).length !==0 || a.is(b);
+    };
+
+    var is_focused = function (e) {
+        // Is element e, or one of its children focused?
+        e = $(e);
+        var target = $(document.activeElement);
+        if (target.length > 0) {
+            if (is_or_has(e, target)) {
+                return true;
+            } else {
+                return false;
+            }
+        } else {
+            return false;
+        }
+    };
+    
+    var mergeopt = function(_class, options, overwrite){
+        options = options || {};
+        overwrite = overwrite || {};
+        return $.extend(true, {}, _class.options_default, options, overwrite);
+    };
+    
+    var ajax_error_msg = function (jqXHR) {
+        // Return a JSON error message if there is one,
+        // otherwise the basic HTTP status text.
+        if (jqXHR.responseJSON && jqXHR.responseJSON.traceback) {
+            return jqXHR.responseJSON.traceback;
+        } else if (jqXHR.responseJSON && jqXHR.responseJSON.message) {
+            return jqXHR.responseJSON.message;
+        } else {
+            return jqXHR.statusText;
+        }
+    };
+    var log_ajax_error = function (jqXHR, status, error) {
+        // log ajax failures with informative messages
+        var msg = "API request failed (" + jqXHR.status + "): ";
+        console.log(jqXHR);
+        msg += ajax_error_msg(jqXHR);
+        console.log(msg);
+    };
+    
+    var requireCodeMirrorMode = function (mode, callback, errback) {
+        // load a mode with requirejs
+        if (typeof mode != "string") mode = mode.name;
+        if (CodeMirror.modes.hasOwnProperty(mode)) {
+            callback(CodeMirror.modes.mode);
+            return;
+        }
+        require([
+                // might want to use CodeMirror.modeURL here
+                ['codemirror/mode', mode, mode].join('/'),
+            ], callback, errback
+        );
+    };
+    
+    var utils = {
         regex_split : regex_split,
         uuid : uuid,
         fixConsole : fixConsole,
-        keycodes : keycodes,
-        press : press,
-        press_up : press_up,
-        press_down : press_down,
-        press_ctrl_enter : press_ctrl_enter,
-        press_shift_enter : press_shift_enter,
-        press_ghetto : press_ghetto,
         fixCarriageReturn : fixCarriageReturn,
         autoLinkUrls : autoLinkUrls,
         points_to_pixels : points_to_pixels,
+        get_body_data : get_body_data,
+        parse_url : parse_url,
         url_path_join : url_path_join,
+        url_join_encode : url_join_encode,
+        encode_uri_components : encode_uri_components,
         splitext : splitext,
+        escape_html : escape_html,
         always_new : always_new,
-        browser : browser
+        to_absolute_cursor_pos : to_absolute_cursor_pos,
+        from_absolute_cursor_pos : from_absolute_cursor_pos,
+        browser : browser,
+        platform: platform,
+        is_or_has : is_or_has,
+        is_focused : is_focused,
+        mergeopt: mergeopt,
+        ajax_error_msg : ajax_error_msg,
+        log_ajax_error : log_ajax_error,
+        requireCodeMirrorMode : requireCodeMirrorMode,
     };
 
-}(IPython));
-
+    // Backwards compatability.
+    IPython.utils = utils;
+    
+    return utils;
+}); 

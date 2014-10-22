@@ -1,53 +1,102 @@
 # encoding: utf-8
-"""Event loop integration for the ZeroMQ-based kernels.
-"""
+"""Event loop integration for the ZeroMQ-based kernels."""
 
-#-----------------------------------------------------------------------------
-#  Copyright (C) 2011  The IPython Development Team
+# Copyright (c) IPython Development Team.
+# Distributed under the terms of the Modified BSD License.
 
-#  Distributed under the terms of the BSD License.  The full license is in
-#  the file COPYING, distributed as part of this software.
-#-----------------------------------------------------------------------------
-
-
-#-----------------------------------------------------------------------------
-# Imports
-#-----------------------------------------------------------------------------
-
+import os
 import sys
 
-# System library imports.
 import zmq
 
-# Local imports.
 from IPython.config.application import Application
 from IPython.utils import io
 
 
-#------------------------------------------------------------------------------
-# Eventloops for integrating the Kernel into different GUIs
-#------------------------------------------------------------------------------
+def _on_os_x_10_9():
+    import platform
+    from distutils.version import LooseVersion as V
+    return sys.platform == 'darwin' and V(platform.mac_ver()[0]) >= V('10.9')
 
+def _notify_stream_qt(kernel, stream):
+    
+    from IPython.external.qt_for_kernel import QtCore
+    
+    if _on_os_x_10_9() and kernel._darwin_app_nap:
+        from IPython.external.appnope import nope_scope as context
+    else:
+        from IPython.core.interactiveshell import NoOpContext as context
+
+    def process_stream_events():
+        while stream.getsockopt(zmq.EVENTS) & zmq.POLLIN:
+            with context():
+                kernel.do_one_iteration()
+    
+    fd = stream.getsockopt(zmq.FD)
+    notifier = QtCore.QSocketNotifier(fd, QtCore.QSocketNotifier.Read, kernel.app)
+    notifier.activated.connect(process_stream_events)
+
+# mapping of keys to loop functions
+loop_map = {
+    'inline': None,
+    'nbagg': None,
+    None : None,
+}
+
+def register_integration(*toolkitnames):
+    """Decorator to register an event loop to integrate with the IPython kernel
+    
+    The decorator takes names to register the event loop as for the %gui magic.
+    You can provide alternative names for the same toolkit.
+    
+    The decorated function should take a single argument, the IPython kernel
+    instance, arrange for the event loop to call ``kernel.do_one_iteration()``
+    at least every ``kernel._poll_interval`` seconds, and start the event loop.
+    
+    :mod:`IPython.kernel.zmq.eventloops` provides and registers such functions
+    for a few common event loops.
+    """
+    def decorator(func):
+        for name in toolkitnames:
+            loop_map[name] = func
+        return func
+    
+    return decorator
+
+
+@register_integration('qt', 'qt4')
 def loop_qt4(kernel):
     """Start a kernel with PyQt4 event loop integration."""
 
-    from IPython.external.qt_for_kernel import QtCore
     from IPython.lib.guisupport import get_app_qt4, start_event_loop_qt4
 
     kernel.app = get_app_qt4([" "])
     kernel.app.setQuitOnLastWindowClosed(False)
-    kernel.timer = QtCore.QTimer()
-    kernel.timer.timeout.connect(kernel.do_one_iteration)
-    # Units for the timer are in milliseconds
-    kernel.timer.start(1000*kernel._poll_interval)
+    
+    for s in kernel.shell_streams:
+        _notify_stream_qt(kernel, s)
+    
     start_event_loop_qt4(kernel.app)
 
+@register_integration('qt5')
+def loop_qt5(kernel):
+    """Start a kernel with PyQt5 event loop integration."""
+    os.environ['QT_API'] = 'pyqt5'
+    return loop_qt4(kernel)
 
+
+@register_integration('wx')
 def loop_wx(kernel):
     """Start a kernel with wx event loop support."""
 
     import wx
     from IPython.lib.guisupport import start_event_loop_wx
+    
+    if _on_os_x_10_9() and kernel._darwin_app_nap:
+        # we don't hook up App Nap contexts for Wx,
+        # just disable it outright.
+        from IPython.external.appnope import nope
+        nope()
 
     doi = kernel.do_one_iteration
      # Wx uses milliseconds
@@ -89,6 +138,7 @@ def loop_wx(kernel):
     start_event_loop_wx(kernel.app)
 
 
+@register_integration('tk')
 def loop_tk(kernel):
     """Start a kernel with the Tk event loop."""
 
@@ -118,6 +168,7 @@ def loop_tk(kernel):
     kernel.timer.start()
 
 
+@register_integration('gtk')
 def loop_gtk(kernel):
     """Start the kernel, coordinating with the GTK event loop"""
     from .gui.gtkembed import GTKEmbed
@@ -126,6 +177,16 @@ def loop_gtk(kernel):
     gtk_kernel.start()
 
 
+@register_integration('gtk3')
+def loop_gtk3(kernel):
+    """Start the kernel, coordinating with the GTK event loop"""
+    from .gui.gtk3embed import GTKEmbed
+
+    gtk_kernel = GTKEmbed(kernel)
+    gtk_kernel.start()
+
+
+@register_integration('osx')
 def loop_cocoa(kernel):
     """Start the kernel, coordinating with the Cocoa CFRunLoop event loop
     via the matplotlib MacOSX backend.
@@ -196,17 +257,6 @@ def loop_cocoa(kernel):
             # ensure excepthook is restored
             sys.excepthook = real_excepthook
 
-# mapping of keys to loop functions
-loop_map = {
-    'qt' : loop_qt4,
-    'qt4': loop_qt4,
-    'inline': None,
-    'osx': loop_cocoa,
-    'wx' : loop_wx,
-    'tk' : loop_tk,
-    'gtk': loop_gtk,
-    None : None,
-}
 
 
 def enable_gui(gui, kernel=None):
@@ -223,5 +273,5 @@ def enable_gui(gui, kernel=None):
             )
     loop = loop_map[gui]
     if loop and kernel.eventloop is not None and kernel.eventloop is not loop:
-            raise RuntimeError("Cannot activate multiple GUI eventloops")
+        raise RuntimeError("Cannot activate multiple GUI eventloops")
     kernel.eventloop = loop

@@ -1,10 +1,22 @@
 
 body {
-    background-color:	@bodyBackground;
+    background-color:   @body-bg;
 }
-    
+
 body.notebook_app {
     overflow: hidden;
+}
+
+@media (max-width: 767px) {
+    // remove bootstrap-responsive's body padding on small screens
+    body.notebook_app {
+        padding-left: 0px;
+        padding-right: 0px;
+    }
+}
+
+#ipython-main-app {
+    .border-box-sizing();
 }
 
 span#notebook_name {
@@ -13,21 +25,32 @@ span#notebook_name {
     padding: 3px;
     border: none;
     font-size: 146.5%;
+    &:hover{
+        // ensure body is lighter on dark palette, 
+        // and vice versa
+        background-color:contrast(@body-bg, lighten(@body-bg,30%), darken(@body-bg,10%));
+    }
+    .corner-all;
 }
 
 div#notebook_panel {
     margin: 0px 0px 0px 0px;
     padding: 0px;
-    .box-shadow(0 -1px 10px rgba(0,0,0,.1));
+    .box-shadow(@notebook-shadow);
+    .border-box-sizing();
 }
 div#notebook {
+    font-size: @notebook_font_size;
+    line-height: @notebook_line_height;
     overflow-y: scroll;
     overflow-x: auto;
     width: 100%;
     /* This spaces the cell away from the edge of the notebook area */
-    padding: 5px 5px 15px 5px;
+    padding: 1em 0 1em 0;
     margin: 0px;
-    border-top: 1px solid @border_color;
+    border-top: 1px solid @navbar-default-border;
+    outline: none;
+    .border-box-sizing();
 }
 
 div.ui-widget-content {
@@ -53,13 +76,13 @@ p.dialog {
 pre, code, kbd, samp { white-space: pre-wrap; }
 
 #fonttest {
-    font-family: @monoFontFamily;
+    font-family: @font-family-monospace;
 }
 
 p {
-	margin-bottom:0;
+    margin-bottom:0;
 }
 
 .end_space {
-  height: 200px;
+    height: 200px;
 }

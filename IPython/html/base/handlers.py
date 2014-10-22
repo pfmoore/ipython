@@ -1,30 +1,22 @@
-"""Base Tornado handlers for the notebook.
+"""Base Tornado handlers for the notebook server."""
 
-Authors:
-
-* Brian Granger
-"""
-
-#-----------------------------------------------------------------------------
-#  Copyright (C) 2011  The IPython Development Team
-#
-#  Distributed under the terms of the BSD License.  The full license is in
-#  the file COPYING, distributed as part of this software.
-#-----------------------------------------------------------------------------
-
-#-----------------------------------------------------------------------------
-# Imports
-#-----------------------------------------------------------------------------
-
+# Copyright (c) IPython Development Team.
+# Distributed under the terms of the Modified BSD License.
 
 import functools
 import json
 import logging
 import os
-import stat
+import re
 import sys
 import traceback
+try:
+    # py3
+    from http.client import responses
+except ImportError:
+    from httplib import responses
 
+from jinja2 import TemplateNotFound
 from tornado import web
 
 try:
@@ -32,28 +24,36 @@ try:
 except ImportError:
     app_log = logging.getLogger()
 
+import IPython
+
 from IPython.config import Application
 from IPython.utils.path import filefind
 from IPython.utils.py3compat import string_types
-
-# UF_HIDDEN is a stat flag not defined in the stat module.
-# It is used by BSD to indicate hidden files.
-UF_HIDDEN = getattr(stat, 'UF_HIDDEN', 32768)
+from IPython.html.utils import is_hidden, url_path_join, url_escape
 
 #-----------------------------------------------------------------------------
 # Top-level handlers
 #-----------------------------------------------------------------------------
+non_alphanum = re.compile(r'[^A-Za-z0-9]')
 
-class RequestHandler(web.RequestHandler):
-    """RequestHandler with default variable setting."""
-
-    def render(*args, **kwargs):
-        kwargs.setdefault('message', '')
-        return web.RequestHandler.render(*args, **kwargs)
-
-class AuthenticatedHandler(RequestHandler):
+class AuthenticatedHandler(web.RequestHandler):
     """A RequestHandler with an authenticated user."""
 
+    def set_default_headers(self):
+        headers = self.settings.get('headers', {})
+
+        if "X-Frame-Options" not in headers:
+            headers["X-Frame-Options"] = "SAMEORIGIN"
+
+        for header_name,value in headers.items() :
+            try:
+                self.set_header(header_name, value)
+            except Exception:
+                # tornado raise Exception (not a subclass)
+                # if method is unsupported (websocket and Access-Control-Allow-Origin
+                # for example, so just ignore)
+                pass
+    
     def clear_login_cookie(self):
         self.clear_cookie(self.cookie_name)
     
@@ -71,9 +71,9 @@ class AuthenticatedHandler(RequestHandler):
 
     @property
     def cookie_name(self):
-        default_cookie_name = 'username-{host}'.format(
-            host=self.request.host,
-        ).replace(':', '-')
+        default_cookie_name = non_alphanum.sub('-', 'username-{}'.format(
+            self.request.host
+        ))
         return self.settings.get('cookie_name', default_cookie_name)
     
     @property
@@ -118,35 +118,21 @@ class IPythonHandler(AuthenticatedHandler):
         else:
             return app_log
     
-    @property
-    def use_less(self):
-        """Use less instead of css in templates"""
-        return self.settings.get('use_less', False)
-    
     #---------------------------------------------------------------
     # URLs
     #---------------------------------------------------------------
-    
-    @property
-    def ws_url(self):
-        """websocket url matching the current request
-
-        By default, this is just `''`, indicating that it should match
-        the same host, protocol, port, etc.
-        """
-        return self.settings.get('websocket_url', '')
     
     @property
     def mathjax_url(self):
         return self.settings.get('mathjax_url', '')
     
     @property
-    def base_project_url(self):
-        return self.settings.get('base_project_url', '/')
-    
+    def base_url(self):
+        return self.settings.get('base_url', '/')
+
     @property
-    def base_kernel_url(self):
-        return self.settings.get('base_kernel_url', '/')
+    def ws_url(self):
+        return self.settings.get('websocket_url', '')
     
     #---------------------------------------------------------------
     # Manager objects
@@ -157,8 +143,8 @@ class IPythonHandler(AuthenticatedHandler):
         return self.settings['kernel_manager']
 
     @property
-    def notebook_manager(self):
-        return self.settings['notebook_manager']
+    def contents_manager(self):
+        return self.settings['contents_manager']
     
     @property
     def cluster_manager(self):
@@ -169,8 +155,50 @@ class IPythonHandler(AuthenticatedHandler):
         return self.settings['session_manager']
     
     @property
-    def project_dir(self):
-        return self.notebook_manager.notebook_dir
+    def kernel_spec_manager(self):
+        return self.settings['kernel_spec_manager']
+
+    #---------------------------------------------------------------
+    # CORS
+    #---------------------------------------------------------------
+    
+    @property
+    def allow_origin(self):
+        """Normal Access-Control-Allow-Origin"""
+        return self.settings.get('allow_origin', '')
+    
+    @property
+    def allow_origin_pat(self):
+        """Regular expression version of allow_origin"""
+        return self.settings.get('allow_origin_pat', None)
+    
+    @property
+    def allow_credentials(self):
+        """Whether to set Access-Control-Allow-Credentials"""
+        return self.settings.get('allow_credentials', False)
+    
+    def set_default_headers(self):
+        """Add CORS headers, if defined"""
+        super(IPythonHandler, self).set_default_headers()
+        if self.allow_origin:
+            self.set_header("Access-Control-Allow-Origin", self.allow_origin)
+        elif self.allow_origin_pat:
+            origin = self.get_origin()
+            if origin and self.allow_origin_pat.match(origin):
+                self.set_header("Access-Control-Allow-Origin", origin)
+        if self.allow_credentials:
+            self.set_header("Access-Control-Allow-Credentials", 'true')
+    
+    def get_origin(self):
+        # Handle WebSocket Origin naming convention differences
+        # The difference between version 8 and 13 is that in 8 the
+        # client sends a "Sec-Websocket-Origin" header and in 13 it's
+        # simply "Origin".
+        if "Origin" in self.request.headers:
+            origin = self.request.headers.get("Origin")
+        else:
+            origin = self.request.headers.get("Sec-Websocket-Origin", None)
+        return origin
     
     #---------------------------------------------------------------
     # template rendering
@@ -188,13 +216,13 @@ class IPythonHandler(AuthenticatedHandler):
     @property
     def template_namespace(self):
         return dict(
-            base_project_url=self.base_project_url,
-            base_kernel_url=self.base_kernel_url,
+            base_url=self.base_url,
+            ws_url=self.ws_url,
             logged_in=self.logged_in,
             login_available=self.login_available,
-            use_less=self.use_less,
+            static_url=self.static_url,
         )
-
+    
     def get_json_body(self):
         """Return the body of the request as JSON data."""
         if not self.request.body:
@@ -208,6 +236,49 @@ class IPythonHandler(AuthenticatedHandler):
             self.log.error("Couldn't parse JSON", exc_info=True)
             raise web.HTTPError(400, u'Invalid JSON in body of request')
         return model
+
+    def write_error(self, status_code, **kwargs):
+        """render custom error pages"""
+        exc_info = kwargs.get('exc_info')
+        message = ''
+        status_message = responses.get(status_code, 'Unknown HTTP Error')
+        if exc_info:
+            exception = exc_info[1]
+            # get the custom message, if defined
+            try:
+                message = exception.log_message % exception.args
+            except Exception:
+                pass
+            
+            # construct the custom reason, if defined
+            reason = getattr(exception, 'reason', '')
+            if reason:
+                status_message = reason
+        
+        # build template namespace
+        ns = dict(
+            status_code=status_code,
+            status_message=status_message,
+            message=message,
+            exception=exception,
+        )
+        
+        self.set_header('Content-Type', 'text/html')
+        # render the template
+        try:
+            html = self.render_template('%s.html' % status_code, **ns)
+        except TemplateNotFound:
+            self.log.debug("No template for %d", status_code)
+            html = self.render_template('error.html', **ns)
+        
+        self.write(html)
+        
+
+
+class Template404(IPythonHandler):
+    """Render our 404 template"""
+    def prepare(self):
+        raise web.HTTPError(404)
 
 
 class AuthenticatedFileHandler(IPythonHandler, web.StaticFileHandler):
@@ -234,28 +305,10 @@ class AuthenticatedFileHandler(IPythonHandler, web.StaticFileHandler):
         """
         abs_path = super(AuthenticatedFileHandler, self).validate_absolute_path(root, absolute_path)
         abs_root = os.path.abspath(root)
-        self.forbid_hidden(abs_root, abs_path)
+        if is_hidden(abs_path, abs_root):
+            self.log.info("Refusing to serve hidden file, via 404 Error")
+            raise web.HTTPError(404)
         return abs_path
-    
-    def forbid_hidden(self, absolute_root, absolute_path):
-        """Raise 403 if a file is hidden or contained in a hidden directory.
-        
-        Hidden is determined by either name starting with '.'
-        or the UF_HIDDEN flag as reported by stat
-        """
-        inside_root = absolute_path[len(absolute_root):]
-        if any(part.startswith('.') for part in inside_root.split(os.sep)):
-            raise web.HTTPError(403)
-        
-        # check UF_HIDDEN on any location up to root
-        path = absolute_path
-        while path and path.startswith(absolute_root) and path != absolute_root:
-            st = os.stat(path)
-            if getattr(st, 'st_flags', 0) & UF_HIDDEN:
-                raise web.HTTPError(403)
-            path = os.path.dirname(path)
-        
-        return absolute_path
 
 
 def json_errors(method):
@@ -277,6 +330,7 @@ def json_errors(method):
         except web.HTTPError as e:
             status = e.status_code
             message = e.log_message
+            self.log.warn(message)
             self.set_status(e.status_code)
             self.finish(json.dumps(dict(message=message)))
         except Exception:
@@ -329,19 +383,29 @@ class FileFindHandler(web.StaticFileHandler):
                 abspath = os.path.abspath(filefind(path, roots))
             except IOError:
                 # IOError means not found
-                raise web.HTTPError(404)
+                return ''
             
             cls._static_paths[path] = abspath
             return abspath
     
     def validate_absolute_path(self, root, absolute_path):
         """check if the file should be served (raises 404, 403, etc.)"""
+        if absolute_path == '':
+            raise web.HTTPError(404)
+        
         for root in self.root:
             if (absolute_path + os.sep).startswith(root):
                 break
         
         return super(FileFindHandler, self).validate_absolute_path(root, absolute_path)
 
+
+class ApiVersionHandler(IPythonHandler):
+
+    @json_errors
+    def get(self):
+        # not authenticated, so give as few info as possible
+        self.finish(json.dumps({"version":IPython.__version__}))
 
 class TrailingSlashHandler(web.RequestHandler):
     """Simple redirect handler that strips trailing slashes
@@ -354,11 +418,53 @@ class TrailingSlashHandler(web.RequestHandler):
     def get(self):
         self.redirect(self.request.uri.rstrip('/'))
 
+
+class FilesRedirectHandler(IPythonHandler):
+    """Handler for redirecting relative URLs to the /files/ handler"""
+    def get(self, path=''):
+        cm = self.contents_manager
+        if cm.path_exists(path):
+            # it's a *directory*, redirect to /tree
+            url = url_path_join(self.base_url, 'tree', path)
+        else:
+            orig_path = path
+            # otherwise, redirect to /files
+            parts = path.split('/')
+            path = '/'.join(parts[:-1])
+            name = parts[-1]
+
+            if not cm.file_exists(name=name, path=path) and 'files' in parts:
+                # redirect without files/ iff it would 404
+                # this preserves pre-2.0-style 'files/' links
+                self.log.warn("Deprecated files/ URL: %s", orig_path)
+                parts.remove('files')
+                path = '/'.join(parts[:-1])
+
+            if not cm.file_exists(name=name, path=path):
+                raise web.HTTPError(404)
+
+            url = url_path_join(self.base_url, 'files', path, name)
+        url = url_escape(url)
+        self.log.debug("Redirecting %s to %s", self.request.path, url)
+        self.redirect(url)
+
+
+#-----------------------------------------------------------------------------
+# URL pattern fragments for re-use
+#-----------------------------------------------------------------------------
+
+path_regex = r"(?P<path>(?:/.*)*)"
+notebook_name_regex = r"(?P<name>[^/]+\.ipynb)"
+notebook_path_regex = "%s/%s" % (path_regex, notebook_name_regex)
+file_name_regex = r"(?P<name>[^/]+)"
+file_path_regex = "%s/%s" % (path_regex, file_name_regex)
+
 #-----------------------------------------------------------------------------
 # URL to handler mappings
 #-----------------------------------------------------------------------------
 
 
 default_handlers = [
-    (r".*/", TrailingSlashHandler)
+    (r".*/", TrailingSlashHandler),
+    (r"api", ApiVersionHandler)
 ]

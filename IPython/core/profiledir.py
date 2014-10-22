@@ -1,39 +1,17 @@
 # encoding: utf-8
-"""
-An object for managing IPython profile directories.
+"""An object for managing IPython profile directories."""
 
-Authors:
-
-* Brian Granger
-* Fernando Perez
-* Min RK
-
-"""
-
-#-----------------------------------------------------------------------------
-#  Copyright (C) 2011 The IPython Development Team
-#
-#  Distributed under the terms of the BSD License.  The full license is in
-#  the file COPYING, distributed as part of this software.
-#-----------------------------------------------------------------------------
-
-#-----------------------------------------------------------------------------
-# Imports
-#-----------------------------------------------------------------------------
+# Copyright (c) IPython Development Team.
+# Distributed under the terms of the Modified BSD License.
 
 import os
 import shutil
 import errno
 
 from IPython.config.configurable import LoggingConfigurable
-from IPython.utils.path import get_ipython_package_dir, expand_path
+from IPython.utils.path import get_ipython_package_dir, expand_path, ensure_dir_exists
 from IPython.utils import py3compat
 from IPython.utils.traitlets import Unicode, Bool
-
-#-----------------------------------------------------------------------------
-# Classes and functions
-#-----------------------------------------------------------------------------
-
 
 #-----------------------------------------------------------------------------
 # Module errors
@@ -79,9 +57,8 @@ class ProfileDir(LoggingConfigurable):
         if self._location_isset:
             raise RuntimeError("Cannot set profile location more than once.")
         self._location_isset = True
-        if not os.path.isdir(new):
-            os.makedirs(new)
-        
+        ensure_dir_exists(new)
+
         # ensure config files exist:
         self.security_dir = os.path.join(new, self.security_dir_name)
         self.log_dir = os.path.join(new, self.log_dir_name)
@@ -92,12 +69,12 @@ class ProfileDir(LoggingConfigurable):
 
     def _log_dir_changed(self, name, old, new):
         self.check_log_dir()
-    
+
     def _mkdir(self, path, mode=None):
         """ensure a directory exists at a given path
-        
+
         This is a version of os.mkdir, with the following differences:
-        
+
         - returns True if it created the directory, False otherwise
         - ignores EEXIST, protecting against race conditions where
           the dir may have been created in between the check and
@@ -124,7 +101,7 @@ class ProfileDir(LoggingConfigurable):
                 return False
             else:
                 raise
-        
+
         return True
 
     def check_log_dir(self):
@@ -270,5 +247,3 @@ class ProfileDir(LoggingConfigurable):
         if not os.path.isdir(profile_dir):
             raise ProfileDirError('Profile directory not found: %s' % profile_dir)
         return cls(location=profile_dir, config=config)
-
-

@@ -1,4 +1,4 @@
-"""This module defines Exporter, a highly configurable converter
+"""This module defines TemplateExporter, a highly configurable converter
 that uses Jinja2 to export notebook files into different formats.
 """
 
@@ -19,8 +19,8 @@ from __future__ import print_function, absolute_import
 # Stdlib imports
 import os
 
-# other libs/dependencies
-from jinja2 import Environment, FileSystemLoader, ChoiceLoader, TemplateNotFound
+# other libs/dependencies are imported at runtime
+# to move ImportErrors to runtime when the requirement is actually needed
 
 # IPython imports
 from IPython.utils.traitlets import MetaHasTraits, Unicode, List, Dict, Any
@@ -43,8 +43,8 @@ default_filters = {
         'ansi2html': filters.ansi2html,
         'filter_data_type': filters.DataTypeFilter,
         'get_lines': filters.get_lines,
-        'highlight2html': filters.highlight2html,
-        'highlight2latex': filters.highlight2latex,
+        'highlight2html': filters.Highlight2HTML,
+        'highlight2latex': filters.Highlight2Latex,
         'ipython2python': filters.ipython2python,
         'posix_path': filters.posix_path,
         'markdown2latex': filters.markdown2latex,
@@ -61,6 +61,7 @@ default_filters = {
         'citation2latex': filters.citation2latex,
         'path2url': filters.path2url,
         'add_prompts': filters.add_prompts,
+        'ascii_only': filters.ascii_only,
 }
 
 #-----------------------------------------------------------------------------
@@ -125,6 +126,12 @@ class TemplateExporter(Exporter):
         help="""Dictionary of filters, by name and namespace, to add to the Jinja
         environment.""")
 
+    raw_mimetypes = List(config=True,
+        help="""formats of raw cells to be included in this Exporter's output."""
+    )
+    def _raw_mimetypes_default(self):
+        return [self.output_mimetype, '']
+
 
     def __init__(self, config=None, extra_loaders=None, **kw):
         """
@@ -145,7 +152,6 @@ class TemplateExporter(Exporter):
         #Init
         self._init_template()
         self._init_environment(extra_loaders=extra_loaders)
-        self._init_preprocessors()
         self._init_filters()
 
 
@@ -157,6 +163,8 @@ class TemplateExporter(Exporter):
         
         This is triggered by various trait changes that would change the template.
         """
+        from jinja2 import TemplateNotFound
+        
         if self.template is not None:
             return
         # called too early, do nothing
@@ -166,15 +174,12 @@ class TemplateExporter(Exporter):
         # template by name with extension added, then try loading the template
         # as if the name is explicitly specified, then try the name as a 
         # 'flavor', and lastly just try to load the template by module name.
-        module_name = self.__module__.rsplit('.', 1)[-1]
         try_names = []
         if self.template_file:
             try_names.extend([
                 self.template_file + self.template_extension,
                 self.template_file,
-                module_name + '_' + self.template_file + self.template_extension,
             ])
-        try_names.append(module_name + self.template_extension)
         for try_name in try_names:
             self.log.debug("Attempting to load template %s", try_name)
             try:
@@ -186,19 +191,21 @@ class TemplateExporter(Exporter):
             else:
                 self.log.info("Loaded template %s", try_name)
                 break
-    
+
     def from_notebook_node(self, nb, resources=None, **kw):
         """
         Convert a notebook from a notebook node instance.
     
         Parameters
         ----------
-        nb : Notebook node
-        resources : dict (**kw) 
-            of additional resources that can be accessed read/write by 
-            preprocessors and filters.
+        nb : :class:`~IPython.nbformat.current.NotebookNode`
+          Notebook node
+        resources : dict
+          Additional resources that can be accessed read/write by
+          preprocessors and filters.
         """
         nb_copy, resources = super(TemplateExporter, self).from_notebook_node(nb, resources, **kw)
+        resources.setdefault('raw_mimetypes', self.raw_mimetypes)
 
         self._load_template()
 
@@ -267,6 +274,7 @@ class TemplateExporter(Exporter):
         """
         Create the Jinja templating environment.
         """
+        from jinja2 import Environment, ChoiceLoader, FileSystemLoader
         here = os.path.dirname(os.path.realpath(__file__))
         loaders = []
         if extra_loaders:

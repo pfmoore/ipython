@@ -1,34 +1,26 @@
+# -*- coding: utf-8 -*- 
 """Test NbConvertApp"""
 
-#-----------------------------------------------------------------------------
-#  Copyright (C) 2013 The IPython Development Team
-#
-#  Distributed under the terms of the BSD License.  The full license is in
-#  the file COPYING, distributed as part of this software.
-#-----------------------------------------------------------------------------
-
-#-----------------------------------------------------------------------------
-# Imports
-#-----------------------------------------------------------------------------
+# Copyright (c) IPython Development Team.
+# Distributed under the terms of the Modified BSD License.
 
 import os
 import glob
 import sys
 
 from .base import TestsBase
+from ..postprocessors import PostProcessorBase
 
 import IPython.testing.tools as tt
 from IPython.testing import decorators as dec
 
-
-#-----------------------------------------------------------------------------
-# Constants
-#-----------------------------------------------------------------------------
-
-
 #-----------------------------------------------------------------------------
 # Classes and functions
 #-----------------------------------------------------------------------------
+
+class DummyPost(PostProcessorBase):
+    def postprocess(self, filename):
+        print("Dummy:%s" % filename)
 
 class TestNbConvertApp(TestsBase):
     """Collection of NbConvertApp tests"""
@@ -84,24 +76,19 @@ class TestNbConvertApp(TestsBase):
         """
         with self.create_temp_cwd(['notebook2.ipynb']):
             os.rename('notebook2.ipynb', 'notebook with spaces.ipynb')
-            o,e = self.call('nbconvert --log-level 0 --to latex '
-                            '"notebook with spaces" --post PDF '
-                            '--PDFPostProcessor.verbose=True')
-            assert os.path.isfile('notebook with spaces.tex')
-            assert os.path.isdir('notebook with spaces_files')
+            self.call('nbconvert --log-level 0 --to pdf'
+                    ' "notebook with spaces"'
+                    ' --PDFExporter.latex_count=1'
+                    ' --PDFExporter.verbose=True'
+            )
             assert os.path.isfile('notebook with spaces.pdf')
 
-    @dec.onlyif_cmds_exist('pdflatex')
-    @dec.onlyif_cmds_exist('pandoc')
     def test_post_processor(self):
-        """
-        Do post processors work?
-        """
+        """Do post processors work?"""
         with self.create_temp_cwd(['notebook1.ipynb']):
-            self.call('nbconvert --log-level 0 --to latex notebook1 '
-                      '--post PDF --PDFPostProcessor.verbose=True')
-            assert os.path.isfile('notebook1.tex')
-            assert os.path.isfile('notebook1.pdf')
+            out, err = self.call('nbconvert --log-level 0 --to python notebook1 '
+                      '--post IPython.nbconvert.tests.test_nbconvertapp.DummyPost')
+            self.assertIn('Dummy:notebook1.py', out)
 
     @dec.onlyif_cmds_exist('pandoc')
     def test_spurious_cr(self):
@@ -135,11 +122,21 @@ class TestNbConvertApp(TestsBase):
         """
         with self.create_temp_cwd(['notebook2.ipynb']):
             self.call('nbconvert --log-level 0 --to slides '  
-                      'notebook2.ipynb --template reveal')
+                      'notebook2.ipynb')
             assert os.path.isfile('notebook2.slides.html')
             with open('notebook2.slides.html') as f:
                 assert '/reveal.css' in f.read()
 
+    def test_output_ext(self):
+        """test --output=outputfile[.ext]"""
+        with self.create_temp_cwd(['notebook1.ipynb']):
+            self.call('nbconvert --log-level 0 --to python '
+                      'notebook1.ipynb --output nb.py')
+            assert os.path.exists('nb.py')
+
+            self.call('nbconvert --log-level 0 --to python '
+                      'notebook1.ipynb --output nb2')
+            assert os.path.exists('nb2.py')
 
     def test_glob_explicit(self):
         """
@@ -183,3 +180,33 @@ class TestNbConvertApp(TestsBase):
             self.call('nbconvert --log-level 0 --config="override.py"')
             assert not os.path.isfile('notebook1.py')
             assert os.path.isfile('notebook2.py')
+
+    def test_accents_in_filename(self):
+        """
+        Can notebook names include accents?
+        """
+        with self.create_temp_cwd():
+            self.create_empty_notebook(u'nb1_análisis.ipynb')
+            self.call('nbconvert --log-level 0 --to python nb1_*')
+            assert os.path.isfile(u'nb1_análisis.py')
+    
+    @dec.onlyif_cmds_exist('pdflatex', 'pandoc')
+    def test_filename_accent_pdf(self):
+        """
+        Generate PDFs if notebooks have an accent in their name?
+        """
+        with self.create_temp_cwd():
+            self.create_empty_notebook(u'nb1_análisis.ipynb')
+            self.call('nbconvert --log-level 0 --to pdf "nb1_*"'
+                    ' --PDFExporter.latex_count=1'
+                    ' --PDFExporter.verbose=True')
+            assert os.path.isfile(u'nb1_análisis.pdf')
+
+    def test_cwd_plugin(self):
+        """
+        Verify that an extension in the cwd can be imported.
+        """
+        with self.create_temp_cwd(['hello.py']):
+            self.create_empty_notebook(u'empty.ipynb')
+            self.call('nbconvert empty --to html --NbConvertApp.writer_class=\'hello.HelloWriter\'')
+            assert os.path.isfile(u'hello.txt')

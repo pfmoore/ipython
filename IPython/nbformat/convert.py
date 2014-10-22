@@ -16,8 +16,6 @@ Authors:
 # Imports
 #-----------------------------------------------------------------------------
 
-import re
-
 from .reader import get_version, versions
 
 #-----------------------------------------------------------------------------
@@ -31,8 +29,8 @@ def convert(nb, to_version):
     a v4.  Also assumes that all conversions can be made in one step increments
     between major versions and ignores minor revisions.
 
-    PARAMETERS:
-    -----------
+    Parameters
+    ----------
     nb : NotebookNode
     to_version : int
         Major revision to convert the notebook to.  Can either be an upgrade or
@@ -63,7 +61,7 @@ def convert(nb, to_version):
         converted = convert_function(nb)
         if converted.get('nbformat', 1) == version:
             raise Exception("Cannot convert notebook from v%d to v%d.  Operation" \
-                "failed silently." % (major, step_version))
+                "failed silently." % (version, step_version))
 
         # Recursively convert until target version is reached.
         return convert(converted, to_version)

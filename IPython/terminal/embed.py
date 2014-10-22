@@ -1,26 +1,9 @@
 # encoding: utf-8
 """
 An embedded IPython shell.
-
-Authors:
-
-* Brian Granger
-* Fernando Perez
-
-Notes
------
 """
-
-#-----------------------------------------------------------------------------
-#  Copyright (C) 2008-2011  The IPython Development Team
-#
-#  Distributed under the terms of the BSD License.  The full license is in
-#  the file COPYING, distributed as part of this software.
-#-----------------------------------------------------------------------------
-
-#-----------------------------------------------------------------------------
-# Imports
-#-----------------------------------------------------------------------------
+# Copyright (c) IPython Development Team.
+# Distributed under the terms of the Modified BSD License.
 
 from __future__ import with_statement
 from __future__ import print_function
@@ -37,10 +20,6 @@ from IPython.terminal.ipapp import load_default_config
 from IPython.utils.traitlets import Bool, CBool, Unicode
 from IPython.utils.io import ask_yes_no
 
-
-#-----------------------------------------------------------------------------
-# Classes and functions
-#-----------------------------------------------------------------------------
 
 # This is an additional magic that is exposed in embedded shells.
 @magics_class
@@ -75,24 +54,17 @@ class InteractiveShellEmbed(TerminalInteractiveShell):
     # Like the base class display_banner is not configurable, but here it
     # is True by default.
     display_banner = CBool(True)
-
-    def __init__(self, config=None, ipython_dir=None, user_ns=None,
-                 user_module=None, custom_exceptions=((),None),
-                 usage=None, banner1=None, banner2=None,
-                 display_banner=None, exit_msg=u'', user_global_ns=None):
+    exit_msg = Unicode()
     
-        if user_global_ns is not None:
+
+    def __init__(self, **kw):
+        
+    
+        if kw.get('user_global_ns', None) is not None:
             warnings.warn("user_global_ns has been replaced by user_module. The\
                            parameter will be ignored.", DeprecationWarning)
 
-        super(InteractiveShellEmbed,self).__init__(
-            config=config, ipython_dir=ipython_dir, user_ns=user_ns,
-            user_module=user_module, custom_exceptions=custom_exceptions,
-            usage=usage, banner1=banner1, banner2=banner2,
-            display_banner=display_banner
-        )
-
-        self.exit_msg = exit_msg
+        super(InteractiveShellEmbed,self).__init__(**kw)
 
         # don't use the ipython crash handler so that user exceptions aren't
         # trapped
@@ -161,30 +133,28 @@ class InteractiveShellEmbed(TerminalInteractiveShell):
                  display_banner=None, global_ns=None, compile_flags=None):
         """Embeds IPython into a running python program.
 
-        Input:
+        Parameters
+        ----------
 
-          - header: An optional header message can be specified.
+        local_ns, module
+          Working local namespace (a dict) and module (a module or similar
+          object). If given as None, they are automatically taken from the scope
+          where the shell was called, so that program variables become visible.
 
-          - local_ns, module: working local namespace (a dict) and module (a
-          module or similar object). If given as None, they are automatically
-          taken from the scope where the shell was called, so that
-          program variables become visible.
+        stack_depth : int
+          How many levels in the stack to go to looking for namespaces (when
+          local_ns or module is None). This allows an intermediate caller to
+          make sure that this function gets the namespace from the intended
+          level in the stack. By default (0) it will get its locals and globals
+          from the immediate caller.
 
-          - stack_depth: specifies how many levels in the stack to go to
-          looking for namespaces (when local_ns or module is None).  This
-          allows an intermediate caller to make sure that this function gets
-          the namespace from the intended level in the stack.  By default (0)
-          it will get its locals and globals from the immediate caller.
+        compile_flags
+          A bit field identifying the __future__ features
+          that are enabled, as passed to the builtin :func:`compile` function.
+          If given as None, they are automatically taken from the scope where
+          the shell was called.
 
-          - compile_flags: A bit field identifying the __future__ features
-          that are enabled, as passed to the builtin `compile` function. If
-          given as None, they are automatically taken from the scope where the
-          shell was called.
-
-        Warning: it's possible to use this in a program which is being run by
-        IPython itself (via %run), but some funny things will happen (a few
-        globals get overwritten). In the future this will be cleaned up, as
-        there is no fundamental reason why it can't work perfectly."""
+        """
         
         if (global_ns is not None) and (module is None):
             warnings.warn("global_ns is deprecated, use module instead.", DeprecationWarning)
@@ -229,16 +199,6 @@ class InteractiveShellEmbed(TerminalInteractiveShell):
         if compile_flags is not None:
             self.compile.flags = compile_flags
 
-        # Patch for global embedding to make sure that things don't overwrite
-        # user globals accidentally. Thanks to Richard <rxe@renre-europe.com>
-        # FIXME. Test this a bit more carefully (the if.. is new)
-        # N.B. This can't now ever be called. Not sure what it was for.
-        # And now, since it wasn't called in the previous version, I'm
-        # commenting out these lines so they can't be called with my new changes
-        # --TK, 2011-12-10
-        #if local_ns is None and module is None:
-        #    self.user_global_ns.update(__main__.__dict__)
-
         # make sure the tab-completer has the correct frame information, so it
         # actually completes using the frame's locals/globals
         self.set_completer_frame()
@@ -274,10 +234,10 @@ def embed(**kwargs):
         from IPython import embed
         a = 10
         b = 20
-        embed('First time')
+        embed(header='First time')
         c = 30
         d = 40
-        embed
+        embed()
 
     Full customization can be done by passing a :class:`Config` in as the
     config argument.

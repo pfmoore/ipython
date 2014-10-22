@@ -1,16 +1,8 @@
-"""Tests for IPython.lib.pretty.
-"""
-#-----------------------------------------------------------------------------
-# Copyright (c) 2011, the IPython Development Team.
-#
-# Distributed under the terms of the Modified BSD License.
-#
-# The full license is in the file COPYING.txt, distributed with this software.
-#-----------------------------------------------------------------------------
+"""Tests for IPython.lib.pretty."""
 
-#-----------------------------------------------------------------------------
-# Imports
-#-----------------------------------------------------------------------------
+# Copyright (c) IPython Development Team.
+# Distributed under the terms of the Modified BSD License.
+
 from __future__ import print_function
 
 # Third-party imports
@@ -19,10 +11,13 @@ import nose.tools as nt
 # Our own imports
 from IPython.lib import pretty
 from IPython.testing.decorators import skip_without
+from IPython.utils.py3compat import PY3
 
-#-----------------------------------------------------------------------------
-# Classes and functions
-#-----------------------------------------------------------------------------
+if PY3:
+    from io import StringIO
+else:
+    from StringIO import StringIO
+
 
 class MyList(object):
     def __init__(self, content):
@@ -44,6 +39,10 @@ class MyList(object):
 class MyDict(dict):
     def _repr_pretty_(self, p, cycle):
         p.text("MyDict(...)")
+
+class MyObj(object):
+    def somemethod(self):
+        pass
 
 
 class Dummy1(object):
@@ -157,11 +156,9 @@ def test_pprint_break_repr():
     nt.assert_equal(output, expected)
 
 def test_bad_repr():
-    """Don't raise, even when repr fails"""
-    output = pretty.pretty(BadRepr())
-    nt.assert_in("failed", output)
-    nt.assert_in("at 0x", output)
-    nt.assert_in("test_pretty", output)
+    """Don't catch bad repr errors"""
+    with nt.assert_raises(ZeroDivisionError):
+        output = pretty.pretty(BadRepr())
 
 class BadException(Exception):
     def __str__(self):
@@ -177,8 +174,83 @@ class ReallyBadRepr(object):
         raise BadException()
 
 def test_really_bad_repr():
-    output = pretty.pretty(ReallyBadRepr())
-    nt.assert_in("failed", output)
-    nt.assert_in("BadException: unknown", output)
-    nt.assert_in("unknown type", output)
-    
+    with nt.assert_raises(BadException):
+        output = pretty.pretty(ReallyBadRepr())
+
+
+class SA(object):
+    pass
+
+class SB(SA):
+    pass
+
+def test_super_repr():
+    output = pretty.pretty(super(SA))
+    nt.assert_in("SA", output)
+
+    sb = SB()
+    output = pretty.pretty(super(SA, sb))
+    nt.assert_in("SA", output)
+
+
+def test_long_list():
+    lis = list(range(10000))
+    p = pretty.pretty(lis)
+    last2 = p.rsplit('\n', 2)[-2:]
+    nt.assert_equal(last2, [' 999,', ' ...]'])
+
+def test_long_set():
+    s = set(range(10000))
+    p = pretty.pretty(s)
+    last2 = p.rsplit('\n', 2)[-2:]
+    nt.assert_equal(last2, [' 999,', ' ...}'])
+
+def test_long_tuple():
+    tup = tuple(range(10000))
+    p = pretty.pretty(tup)
+    last2 = p.rsplit('\n', 2)[-2:]
+    nt.assert_equal(last2, [' 999,', ' ...)'])
+
+def test_long_dict():
+    d = { n:n for n in range(10000) }
+    p = pretty.pretty(d)
+    last2 = p.rsplit('\n', 2)[-2:]
+    nt.assert_equal(last2, [' 999: 999,', ' ...}'])
+
+def test_unbound_method():
+    output = pretty.pretty(MyObj.somemethod)
+    nt.assert_in('MyObj.somemethod', output)
+
+
+class MetaClass(type):
+    def __new__(cls, name):
+        return type.__new__(cls, name, (object,), {'name': name})
+
+    def __repr__(self):
+        return "[CUSTOM REPR FOR CLASS %s]" % self.name
+
+
+ClassWithMeta = MetaClass('ClassWithMeta')
+
+
+def test_metaclass_repr():
+    output = pretty.pretty(ClassWithMeta)
+    nt.assert_equal(output, "[CUSTOM REPR FOR CLASS ClassWithMeta]")
+
+
+def test_basic_class():
+    def type_pprint_wrapper(obj, p, cycle):
+        if obj is MyObj:
+            type_pprint_wrapper.called = True
+        return pretty._type_pprint(obj, p, cycle)
+    type_pprint_wrapper.called = False
+
+    stream = StringIO()
+    printer = pretty.RepresentationPrinter(stream)
+    printer.type_pprinters[type] = type_pprint_wrapper
+    printer.pretty(MyObj)
+    printer.flush()
+    output = stream.getvalue()
+
+    nt.assert_equal(output, '%s.MyObj' % __name__)
+    nt.assert_true(type_pprint_wrapper.called)

@@ -60,7 +60,7 @@ class TestSession(SessionTestCase):
         msg = self.session.msg('execute', content=dict(a=10, b=1.1))
         msg_list = self.session.serialize(msg, ident=b'foo')
         ident, msg_list = self.session.feed_identities(msg_list)
-        new_msg = self.session.unserialize(msg_list)
+        new_msg = self.session.deserialize(msg_list)
         self.assertEqual(ident[0], b'foo')
         self.assertEqual(new_msg['msg_id'],msg['msg_id'])
         self.assertEqual(new_msg['msg_type'],msg['msg_type'])
@@ -82,7 +82,7 @@ class TestSession(SessionTestCase):
         self.session.send(A, msg, ident=b'foo', buffers=[b'bar'])
         
         ident, msg_list = self.session.feed_identities(B.recv_multipart())
-        new_msg = self.session.unserialize(msg_list)
+        new_msg = self.session.deserialize(msg_list)
         self.assertEqual(ident[0], b'foo')
         self.assertEqual(new_msg['msg_id'],msg['msg_id'])
         self.assertEqual(new_msg['msg_type'],msg['msg_type'])
@@ -100,7 +100,7 @@ class TestSession(SessionTestCase):
         self.session.send(A, None, content=content, parent=parent,
             header=header, metadata=metadata, ident=b'foo', buffers=[b'bar'])
         ident, msg_list = self.session.feed_identities(B.recv_multipart())
-        new_msg = self.session.unserialize(msg_list)
+        new_msg = self.session.deserialize(msg_list)
         self.assertEqual(ident[0], b'foo')
         self.assertEqual(new_msg['msg_id'],msg['msg_id'])
         self.assertEqual(new_msg['msg_type'],msg['msg_type'])
@@ -263,7 +263,7 @@ class TestSession(SessionTestCase):
         p = session.msg('msg')
         msg = session.msg('msg', content=content, metadata=metadata, parent=p['header'])
         smsg = session.serialize(msg)
-        msg2 = session.unserialize(session.feed_identities(smsg)[1])
+        msg2 = session.deserialize(session.feed_identities(smsg)[1])
         assert isinstance(msg2['header']['date'], datetime)
         self.assertEqual(msg['header'], msg2['header'])
         self.assertEqual(msg['parent_header'], msg2['parent_header'])
@@ -284,6 +284,35 @@ class TestSession(SessionTestCase):
     
     @skipif(module_not_available('msgpack'))
     def test_datetimes_msgpack(self):
-        session = ss.Session(packer='msgpack.packb', unpacker='msgpack.unpackb')
+        import msgpack
+        
+        session = ss.Session(
+            pack=msgpack.packb,
+            unpack=lambda buf: msgpack.unpackb(buf, encoding='utf8'),
+        )
         self._datetime_test(session)
     
+    def test_send_raw(self):
+        ctx = zmq.Context.instance()
+        A = ctx.socket(zmq.PAIR)
+        B = ctx.socket(zmq.PAIR)
+        A.bind("inproc://test")
+        B.connect("inproc://test")
+
+        msg = self.session.msg('execute', content=dict(a=10))
+        msg_list = [self.session.pack(msg[part]) for part in 
+                    ['header', 'parent_header', 'metadata', 'content']]
+        self.session.send_raw(A, msg_list, ident=b'foo')
+        
+        ident, new_msg_list = self.session.feed_identities(B.recv_multipart())
+        new_msg = self.session.deserialize(new_msg_list)
+        self.assertEqual(ident[0], b'foo')
+        self.assertEqual(new_msg['msg_type'],msg['msg_type'])
+        self.assertEqual(new_msg['header'],msg['header'])
+        self.assertEqual(new_msg['parent_header'],msg['parent_header'])
+        self.assertEqual(new_msg['content'],msg['content'])
+        self.assertEqual(new_msg['metadata'],msg['metadata'])
+
+        A.close()
+        B.close()
+        ctx.term()

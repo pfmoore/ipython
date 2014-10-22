@@ -23,6 +23,7 @@ PUBLIC_IPS : A list of public IP addresses that point to this machine.
 #-----------------------------------------------------------------------------
 
 import os
+import re
 import socket
 
 from .data import uniq_stable
@@ -100,7 +101,10 @@ def _load_ips_ifconfig():
     for line in lines:
         blocks = line.lower().split()
         if (len(blocks) >= 2) and (blocks[0] == 'inet'):
-            addrs.append(blocks[1])
+            if  blocks[1].startswith("addr:"):
+                addrs.append(blocks[1].split(":")[1])
+            else:
+                addrs.append(blocks[1])
     _populate_from_list(addrs)
 
 
@@ -118,6 +122,7 @@ def _load_ips_ip():
             addrs.append(blocks[1].split('/')[0])
     _populate_from_list(addrs)
 
+_ipconfig_ipv4_pat = re.compile(r'ipv4.*?(\d+\.\d+\.\d+\.\d+)$', re.IGNORECASE)
 
 def _load_ips_ipconfig():
     """load ip addresses from `ipconfig` output (Windows)"""
@@ -126,11 +131,11 @@ def _load_ips_ipconfig():
         raise IOError("no ipconfig: %s" % err)
     
     lines = out.splitlines()
-    addrs = ['127.0.0.1']
+    addrs = []
     for line in lines:
-        line = line.lower().split()
-        if line[:2] == ['ipv4', 'address']:
-            addrs.append(line.split()[-1])
+        m = _ipconfig_ipv4_pat.match(line.strip())
+        if m:
+            addrs.append(m.group(1))
     _populate_from_list(addrs)
 
 

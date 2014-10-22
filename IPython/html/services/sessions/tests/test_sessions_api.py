@@ -37,8 +37,9 @@ class SessionAPI(object):
     def get(self, id):
         return self._req('GET', id)
 
-    def create(self, name, path):
-        body = json.dumps({'notebook': {'name':name, 'path':path}})
+    def create(self, name, path, kernel_name='python'):
+        body = json.dumps({'notebook': {'name':name, 'path':path},
+                           'kernel': {'name': kernel_name}})
         return self._req('POST', '', body)
 
     def modify(self, id, name, path):
@@ -59,7 +60,8 @@ class SessionAPITest(NotebookTestBase):
             if e.errno != errno.EEXIST:
                 raise
 
-        with io.open(pjoin(nbdir, 'foo', 'nb1.ipynb'), 'w') as f:
+        with io.open(pjoin(nbdir, 'foo', 'nb1.ipynb'), 'w',
+                     encoding='utf-8') as f:
             nb = new_notebook(name='nb1')
             write(nb, f, format='ipynb')
 

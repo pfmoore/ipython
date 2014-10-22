@@ -35,7 +35,7 @@ from IPython.utils import py3compat
 from IPython.utils.contexts import preserve_keys
 from IPython.utils.path import filefind
 from IPython.utils.traitlets import (
-    Unicode, Instance, List, Bool, CaselessStrEnum, Dict
+    Unicode, Instance, List, Bool, CaselessStrEnum
 )
 from IPython.lib.inputhook import guis
 
@@ -163,9 +163,18 @@ class InteractiveShellApp(Configurable):
     
     # Extensions that are always loaded (not configurable)
     default_extensions = List(Unicode, [u'storemagic'], config=False)
+    
+    hide_initial_ns = Bool(True, config=True,
+        help="""Should variables loaded at startup (by startup files, exec_lines, etc.)
+        be hidden from tools like %who?"""
+    )
 
     exec_files = List(Unicode, config=True,
         help="""List of files to run at IPython startup."""
+    )
+    exec_PYTHONSTARTUP = Bool(True, config=True,
+        help="""Run the file referenced by the PYTHONSTARTUP environment
+        variable at IPython startup."""
     )
     file_to_run = Unicode('', config=True,
         help="""A file to be run""")
@@ -282,15 +291,19 @@ class InteractiveShellApp(Configurable):
         self._run_startup_files()
         self._run_exec_lines()
         self._run_exec_files()
+        
+        # Hide variables defined here from %who etc.
+        if self.hide_initial_ns:
+            self.shell.user_ns_hidden.update(self.shell.user_ns)
+        
+        # command-line execution (ipython -i script.py, ipython -m module)
+        # should *not* be excluded from %whos
         self._run_cmd_line_code()
         self._run_module()
         
         # flush output, so itwon't be attached to the first cell
         sys.stdout.flush()
         sys.stderr.flush()
-        
-        # Hide variables defined here from %who etc.
-        self.shell.user_ns_hidden.update(self.shell.user_ns)
 
     def _run_exec_lines(self):
         """Run lines of code in IPythonApp.exec_lines in the user's namespace."""
@@ -345,8 +358,23 @@ class InteractiveShellApp(Configurable):
         """Run files from profile startup directory"""
         startup_dir = self.profile_dir.startup_dir
         startup_files = []
-        if os.environ.get('PYTHONSTARTUP', False):
-            startup_files.append(os.environ['PYTHONSTARTUP'])
+        
+        if self.exec_PYTHONSTARTUP and os.environ.get('PYTHONSTARTUP', False) and \
+                not (self.file_to_run or self.code_to_run or self.module_to_run):
+            python_startup = os.environ['PYTHONSTARTUP']
+            self.log.debug("Running PYTHONSTARTUP file %s...", python_startup)
+            try:
+                self._exec_file(python_startup)
+            except:
+                self.log.warn("Unknown error in handling PYTHONSTARTUP file %s:", python_startup)
+                self.shell.showtraceback()
+            finally:
+                # Many PYTHONSTARTUP files set up the readline completions,
+                # but this is often at odds with IPython's own completions.
+                # Do not allow PYTHONSTARTUP to set up readline.
+                if self.shell.has_readline:
+                    self.shell.set_readline_completer()
+        
         startup_files += glob.glob(os.path.join(startup_dir, '*.py'))
         startup_files += glob.glob(os.path.join(startup_dir, '*.ipy'))
         if not startup_files:

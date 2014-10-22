@@ -58,10 +58,14 @@ import os
 import shutil
 import sys
 import tarfile
-import urllib2
 import zipfile
 
 from IPython.utils.path import get_ipython_dir
+
+try:
+    from urllib.request import urlopen # Py 3
+except ImportError:
+    from urllib2 import urlopen
 
 #-----------------------------------------------------------------------------
 #
@@ -128,11 +132,10 @@ def extract_zip(fd, dest):
     z.extractall(parent)
 
     # it will be mathjax-MathJax-<sha>, rename to just mathjax
-    d = os.path.join(parent, topdir)
     os.rename(os.path.join(parent, topdir), dest)
 
 
-def install_mathjax(tag='v2.2', dest=default_dest, replace=False, file=None, extractor=extract_tar):
+def install_mathjax(tag='2.4.0', dest=default_dest, replace=False, file=None, extractor=extract_tar):
     """Download and/or install MathJax for offline use.
 
     This will install mathjax to the nbextensions dir in your IPYTHONDIR.
@@ -146,8 +149,8 @@ def install_mathjax(tag='v2.2', dest=default_dest, replace=False, file=None, ext
         Whether to remove and replace an existing install.
     dest : str [IPYTHONDIR/nbextensions/mathjax]
         Where to install mathjax
-    tag : str ['v2.2']
-        Which tag to download. Default is 'v2.2', the current stable release,
+    tag : str ['2.4.0']
+        Which tag to download. Default is '2.4.0', the current stable release,
         but alternatives include 'v1.1a' and 'master'.
     file : file like object [ defualt to content of https://github.com/mathjax/MathJax/tarball/#{tag}]
         File handle from which to untar/unzip/... mathjax
@@ -167,7 +170,7 @@ def install_mathjax(tag='v2.2', dest=default_dest, replace=False, file=None, ext
         # download mathjax
         mathjax_url = "https://github.com/mathjax/MathJax/archive/%s.tar.gz" %tag
         print("Downloading mathjax source from %s" % mathjax_url)
-        response = urllib2.urlopen(mathjax_url)
+        response = urlopen(mathjax_url)
         file = response.fp
 
     print("Extracting to %s" % dest)

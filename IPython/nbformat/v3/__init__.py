@@ -16,10 +16,13 @@ Authors:
 # Imports
 #-----------------------------------------------------------------------------
 
+import os
+
 from .nbbase import (
     NotebookNode,
     new_code_cell, new_text_cell, new_notebook, new_output, new_worksheet,
-    new_metadata, new_author, new_heading_cell, nbformat, nbformat_minor
+    new_metadata, new_author, new_heading_cell, nbformat, nbformat_minor,
+    nbformat_schema
 )
 
 from .nbjson import reads as reads_json, writes as writes_json
@@ -60,15 +63,15 @@ def parse_filename(fname):
     (fname, name, format) : (unicode, unicode, unicode)
         The filename, notebook name and format.
     """
-    if fname.endswith(u'.ipynb'):
+    basename, ext = os.path.splitext(fname)
+    if ext == u'.ipynb':
         format = u'json'
-    elif fname.endswith(u'.json'):
+    elif ext == u'.json':
         format = u'json'
-    elif fname.endswith(u'.py'):
+    elif ext == u'.py':
         format = u'py'
     else:
+        basename = fname
         fname = fname + u'.ipynb'
         format = u'json'
-    name = fname.split('.')[0]
-    return fname, name, format
-
+    return fname, basename, format

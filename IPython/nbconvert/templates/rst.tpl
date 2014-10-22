@@ -8,7 +8,7 @@
 {% endblock output_prompt %}
 
 {% block input %}
-{%- if not cell.input.isspace() -%}
+{%- if cell.input.strip() -%}
 .. code:: python
 
 {{ cell.input | indent}}
@@ -38,15 +38,15 @@
 {% endblock stream %}
 
 {% block data_svg %}
-.. image:: {{ output.svg_filename }}
+.. image:: {{ output.svg_filename|urlencode }}
 {% endblock data_svg %}
 
 {% block data_png %}
-.. image:: {{ output.png_filename }}
+.. image:: {{ output.png_filename|urlencode }}
 {% endblock data_png %}
 
 {% block data_jpg %}
-.. image:: {{ output.jpeg_filename }}
+.. image:: {{ output.jpeg_filename|urlencode }}
 {% endblock data_jpg %}
 
 {% block data_latex %}
@@ -74,10 +74,6 @@
 {% block headingcell scoped %}
 {{ ("#" * cell.level + cell.source) | replace('\n', ' ') | markdown2rst }}
 {% endblock headingcell %}
-
-{% block rawcell scoped %}
-{{ cell.source }}
-{% endblock rawcell %}
 
 {% block unknowncell scoped %}
 unknown type  {{cell.type}}

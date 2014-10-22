@@ -1,32 +1,28 @@
-//----------------------------------------------------------------------------
-//  Copyright (C) 2012  The IPython Development Team
-//
-//  Distributed under the terms of the BSD License.  The full license is in
-//  the file COPYING, distributed as part of this software.
-//----------------------------------------------------------------------------
+// Copyright (c) IPython Development Team.
+// Distributed under the terms of the Modified BSD License.
 
-//============================================================================
-// CellToolbar
-//============================================================================
-
-
-/**
- * A Module to control the per-cell toolbar.
- * @module IPython
- * @namespace IPython
- * @submodule CellToolbar
- */
-var IPython = (function (IPython) {
+define([
+    'base/js/namespace',
+    'jquery',
+    'base/js/events'
+], function(IPython, $, events) {
     "use strict";
 
-    /**
-     * @constructor
-     * @class CellToolbar
-     * @param {The cell to attach the metadata UI to} cell
-     */
-    var CellToolbar = function (cell) {
+    var CellToolbar = function (options) {
+        // Constructor
+        //
+        // Parameters:
+        //  options: dictionary
+        //      Dictionary of keyword arguments.
+        //          events: $(Events) instance 
+        //          cell: Cell instance
+        //          notebook: Notebook instance 
+        //
+        //  TODO: This leaks, when cell are deleted
+        //  There is still a reference to each celltoolbars. 
         CellToolbar._instances.push(this);
-        this.cell = cell;
+        this.notebook = options.notebook;
+        this.cell = options.cell;
         this.create_element();
         this.rebuild();
         return this;
@@ -34,40 +30,41 @@ var IPython = (function (IPython) {
 
 
     CellToolbar.prototype.create_element = function () {
-        this.inner_element = $('<div/>').addClass('celltoolbar hbox reverse')
+        this.inner_element = $('<div/>').addClass('celltoolbar');
         this.element = $('<div/>').addClass('ctb_hideshow')
             .append(this.inner_element);
     };
 
 
     // The default css style for the outer celltoolbar div
-    // (ctb_hideshow) is display: none. We add the ctb_show
-    // class to either 1) the body to show all cell's toolbars
-    // or 2) to the individual celltoolbar divs to show just one
-    // cell's toolbar.
+    // (ctb_hideshow) is display: none.
+    // To show the cell toolbar, *both* of the following conditions must be met:
+    // - A parent container has class `ctb_global_show`
+    // - The celltoolbar has the class `ctb_show`
+    // This allows global show/hide, as well as per-cell show/hide.
 
     CellToolbar.global_hide = function () {
-        $('body').removeClass('ctb_show');
-    }
+        $('body').removeClass('ctb_global_show');
+    };
 
 
     CellToolbar.global_show = function () {
-       $('body').addClass('ctb_show');
-    }
+        $('body').addClass('ctb_global_show');
+    };
 
 
     CellToolbar.prototype.hide = function () {
         this.element.removeClass('ctb_show');
-    }
+    };
 
 
     CellToolbar.prototype.show = function () {
         this.element.addClass('ctb_show');
-    }
+    };
 
 
     /**
-     * Class variable that should contain a dict of all availlable callback
+     * Class variable that should contain a dict of all available callback
      * we need to think of wether or not we allow nested namespace
      * @property _callback_dict
      * @private
@@ -89,7 +86,7 @@ var IPython = (function (IPython) {
 
 
     /**
-     * Class variable that should contains the CellToolbar instances for each
+     * Class variable that should contain the CellToolbar instances for each
      * cell of the notebook
      *
      * @private
@@ -97,17 +94,17 @@ var IPython = (function (IPython) {
      * @static
      * @type List
      */
-    CellToolbar._instances =[]
+    CellToolbar._instances = [];
 
 
     /**
-     * keep a list of all the availlabel presets for the toolbar
+     * keep a list of all the available presets for the toolbar
      * @private
      * @property _presets
      * @static
      * @type Dict
      */
-    CellToolbar._presets ={}
+    CellToolbar._presets = {};
 
 
     // this is by design not a prototype.
@@ -116,7 +113,9 @@ var IPython = (function (IPython) {
      * @method register_callback
      * @param name {String} name to use to refer to the callback. It is advised to use a prefix with the name
      * for easier sorting and avoid collision
-     * @param  callback {function(div, cell)} callback that will be called to generate the ui element
+     * @param callback {function(div, cell)} callback that will be called to generate the ui element
+     * @param [cell_types] {List_of_String|undefined} optional list of cell types. If present the UI element
+     * will be added only to cells of types in the list.
      *
      *
      * The callback will receive the following element :
@@ -152,9 +151,9 @@ var IPython = (function (IPython) {
      *      // user the ability to use it later
      *      CellToolbar.register_callback('foo', toggle);
      */
-    CellToolbar.register_callback = function(name, callback){
+    CellToolbar.register_callback = function(name, callback, cell_types) {
         // Overwrite if it already exists.
-        CellToolbar._callback_dict[name] = callback;
+        CellToolbar._callback_dict[name] = cell_types ? {callback: callback, cell_types: cell_types} : callback;
     };
 
 
@@ -164,7 +163,7 @@ var IPython = (function (IPython) {
      * @method register_preset
      * @param name {String} name to use to refer to the preset. It is advised to use a prefix with the name
      * for easier sorting and avoid collision
-     * @param  preset_list {List of String} reverse order of the button in the toolbar. Each String of the list
+     * @param  preset_list {List_of_String} reverse order of the button in the toolbar. Each String of the list
      *          should correspond to a name of a registerd callback.
      *
      * @private
@@ -179,9 +178,14 @@ var IPython = (function (IPython) {
      *      CellToolbar.register_preset('foo.foo_preset1', ['foo.c1', 'foo.c2', 'foo.c5'])
      *      CellToolbar.register_preset('foo.foo_preset2', ['foo.c4', 'foo.c5'])
      */
-    CellToolbar.register_preset = function(name, preset_list) {
-        CellToolbar._presets[name] = preset_list
-        $([IPython.events]).trigger('preset_added.CellToolbar', {name: name});
+    CellToolbar.register_preset = function(name, preset_list, notebook) {
+        CellToolbar._presets[name] = preset_list;
+        events.trigger('preset_added.CellToolbar', {name: name});
+        // When "register_callback" is called by a custom extension, it may be executed after notebook is loaded.
+        // In that case, activate the preset if needed.
+        if (notebook && notebook.metadata && notebook.metadata.celltoolbar === name){
+            CellToolbar.activate_preset(name);
+        }
     };
 
 
@@ -214,14 +218,16 @@ var IPython = (function (IPython) {
      *
      *      CellToolbar.activate_preset('foo.foo_preset1');
      */
-    CellToolbar.activate_preset= function(preset_name){
+    CellToolbar.activate_preset = function(preset_name){
         var preset = CellToolbar._presets[preset_name];
 
-        if(preset != undefined){
+        if(preset !== undefined){
             CellToolbar._ui_controls_list = preset;
             CellToolbar.rebuild_all();
         }
-    }
+
+        events.trigger('preset_activated.CellToolbar', {name: preset_name});
+    };
 
 
     /**
@@ -232,36 +238,56 @@ var IPython = (function (IPython) {
      *
      */
     CellToolbar.rebuild_all = function(){
-        for(var i in CellToolbar._instances){
+        for(var i=0; i < CellToolbar._instances.length; i++){
             CellToolbar._instances[i].rebuild();
         }
-    }
+    };
 
     /**
-     * Rebuild all the button on the toolbar to update it's state.
+     * Rebuild all the button on the toolbar to update its state.
      * @method rebuild
      */
     CellToolbar.prototype.rebuild = function(){
         // strip evrything from the div
-        // which is probabli metainner.
+        // which is probably inner_element
         // or this.element.
         this.inner_element.empty();
+        this.ui_controls_list = [];
 
-        var cdict = CellToolbar._callback_dict;
+        var callbacks = CellToolbar._callback_dict;
         var preset = CellToolbar._ui_controls_list;
-        // Yes we iterate on the class varaible, not the instance one.
-        for ( var index in CellToolbar._ui_controls_list){
+        // Yes we iterate on the class variable, not the instance one.
+        for (var i=0; i < preset.length; i++) {
+            var key = preset[i];
+            var callback = callbacks[key];
+            if (!callback) continue;
+
+            if (typeof callback === 'object') {
+                if (callback.cell_types.indexOf(this.cell.cell_type) === -1) continue;
+                callback = callback.callback;
+            }
+            
             var local_div = $('<div/>').addClass('button_container');
-            // Note,
-            // do this the other way, wrap in try/catch and don't append if any errors.
-            this.inner_element.append(local_div)
-            cdict[preset[index]](local_div, this.cell)
+            try {
+                callback(local_div, this.cell, this);
+                this.ui_controls_list.push(key);
+            } catch (e) {
+                console.log("Error in cell toolbar callback " + key, e);
+                continue;
+            }
+            // only append if callback succeeded.
+            this.inner_element.append(local_div);
         }
-    }
+
+        // If there are no controls or the cell is a rendered TextCell hide the toolbar.
+        if (!this.ui_controls_list.length) {
+            this.hide();
+        } else {
+            this.show();
+        }
+    };
 
 
-    /**
-     */
     CellToolbar.utils = {};
 
 
@@ -303,8 +329,8 @@ var IPython = (function (IPython) {
      *
      */
     CellToolbar.utils.checkbox_ui_generator = function(name, setter, getter){
-         return function(div, cell) {
-            var button_container = $(div)
+        return function(div, cell, celltoolbar) {
+            var button_container = $(div);
 
             var chkb = $('<input/>').attr('type', 'checkbox');
             var lbl = $('<label/>').append($('<span/>').text(name));
@@ -315,19 +341,49 @@ var IPython = (function (IPython) {
                         var v = getter(cell);
                         setter(cell, !v);
                         chkb.attr("checked", !v);
-                    })
-           button_container.append($('<div/>').append(lbl));
+            });
+            button_container.append($('<span/>').append(lbl));
+        };
+    };
 
-        }
-    }
 
+    /**
+     * A utility function to generate bindings between a input field and cell/metadata
+     * @method utils.input_ui_generator
+     * @static
+     *
+     * @param name {string} Label in front of the input field
+     * @param setter {function( cell, newValue )}
+     *        A setter method to set the newValue
+     * @param getter {function( cell )}
+     *        A getter methods which return the current value.
+     *
+     * @return callback {function( div, cell )} Callback to be passed to `register_callback`
+     *
+     */
+    CellToolbar.utils.input_ui_generator = function(name, setter, getter){
+        return function(div, cell, celltoolbar) {
+            var button_container = $(div);
+
+            var text = $('<input/>').attr('type', 'text');
+            var lbl = $('<label/>').append($('<span/>').text(name));
+            lbl.append(text);
+            text.attr("value", getter(cell));
+
+            text.keyup(function(){
+                setter(cell, text.val());
+            });
+            button_container.append($('<span/>').append(lbl));
+            IPython.keyboard_manager.register_events(text);
+        };
+    };
 
     /**
      * A utility function to generate bindings between a dropdown list cell
      * @method utils.select_ui_generator
      * @static
      *
-     * @param list_list {list of sublist} List of sublist of metadata value and name in the dropdown list.
+     * @param list_list {list_of_sublist} List of sublist of metadata value and name in the dropdown list.
      *        subslit shoud contain 2 element each, first a string that woul be displayed in the dropdown list,
      *        and second the corresponding value to  be passed to setter/return by getter. the corresponding value 
      *        should not be "undefined" or behavior can be unexpected.
@@ -365,29 +421,28 @@ var IPython = (function (IPython) {
      *      CellToolbar.register_callback('slideshow.select', select_type);
      *
      */
-    CellToolbar.utils.select_ui_generator = function(list_list, setter, getter, label){
-        label= label? label: "";
-        return function(div, cell) {
-            var button_container = $(div)
+    CellToolbar.utils.select_ui_generator = function(list_list, setter, getter, label) {
+        label = label || "";
+        return function(div, cell, celltoolbar) {
+            var button_container = $(div);
             var lbl = $("<label/>").append($('<span/>').text(label));
-            var select = $('<select/>').addClass('ui-widget ui-widget-content');
-            for(var itemn in list_list){
-                var opt = $('<option/>');
-                        opt.attr('value', list_list[itemn][1])
-                        opt.text(list_list[itemn][0])
+            var select = $('<select/>');
+            for(var i=0; i < list_list.length; i++){
+                var opt = $('<option/>')
+                    .attr('value', list_list[i][1])
+                    .text(list_list[i][0]);
                 select.append(opt);
             }
             select.val(getter(cell));
             select.change(function(){
                         setter(cell, select.val());
                     });
-            button_container.append($('<div/>').append(lbl).append(select));
-
-        }
+            button_container.append($('<span/>').append(lbl).append(select));
+        };
     };
 
-
+    // Backwards compatability.
     IPython.CellToolbar = CellToolbar;
 
-    return IPython;
-}(IPython));
+    return {'CellToolbar': CellToolbar};
+});

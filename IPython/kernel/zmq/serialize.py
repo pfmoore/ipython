@@ -1,19 +1,7 @@
-"""serialization utilities for apply messages
+"""serialization utilities for apply messages"""
 
-Authors:
-
-* Min RK
-"""
-#-----------------------------------------------------------------------------
-#  Copyright (C) 2010-2011  The IPython Development Team
-#
-#  Distributed under the terms of the BSD License.  The full license is in
-#  the file COPYING, distributed as part of this software.
-#-----------------------------------------------------------------------------
-
-#-----------------------------------------------------------------------------
-# Imports
-#-----------------------------------------------------------------------------
+# Copyright (c) IPython Development Team.
+# Distributed under the terms of the Modified BSD License.
 
 try:
     import cPickle
@@ -22,13 +10,12 @@ except:
     cPickle = None
     import pickle
 
-
 # IPython imports
 from IPython.utils import py3compat
 from IPython.utils.data import flatten
 from IPython.utils.pickleutil import (
     can, uncan, can_sequence, uncan_sequence, CannedObject,
-    istype, sequence_types,
+    istype, sequence_types, PICKLE_PROTOCOL,
 )
 
 if py3compat.PY3:
@@ -99,10 +86,10 @@ def serialize_object(obj, buffer_threshold=MAX_BYTES, item_threshold=MAX_ITEMS):
         cobj = can(obj)
         buffers.extend(_extract_buffers(cobj, buffer_threshold))
 
-    buffers.insert(0, pickle.dumps(cobj,-1))
+    buffers.insert(0, pickle.dumps(cobj, PICKLE_PROTOCOL))
     return buffers
 
-def unserialize_object(buffers, g=None):
+def deserialize_object(buffers, g=None):
     """reconstruct an object serialized by serialize_object from data buffers.
     
     Parameters
@@ -162,8 +149,8 @@ def pack_apply_message(f, args, kwargs, buffer_threshold=MAX_BYTES, item_thresho
     
     info = dict(nargs=len(args), narg_bufs=len(arg_bufs), kw_keys=kw_keys)
     
-    msg = [pickle.dumps(can(f),-1)]
-    msg.append(pickle.dumps(info, -1))
+    msg = [pickle.dumps(can(f), PICKLE_PROTOCOL)]
+    msg.append(pickle.dumps(info, PICKLE_PROTOCOL))
     msg.extend(arg_bufs)
     msg.extend(kwarg_bufs)
     
@@ -183,14 +170,14 @@ def unpack_apply_message(bufs, g=None, copy=True):
     
     args = []
     for i in range(info['nargs']):
-        arg, arg_bufs = unserialize_object(arg_bufs, g)
+        arg, arg_bufs = deserialize_object(arg_bufs, g)
         args.append(arg)
     args = tuple(args)
     assert not arg_bufs, "Shouldn't be any arg bufs left over"
     
     kwargs = {}
     for key in info['kw_keys']:
-        kwarg, kwarg_bufs = unserialize_object(kwarg_bufs, g)
+        kwarg, kwarg_bufs = deserialize_object(kwarg_bufs, g)
         kwargs[key] = kwarg
     assert not kwarg_bufs, "Shouldn't be any kwarg bufs left over"
     

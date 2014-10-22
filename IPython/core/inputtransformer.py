@@ -1,3 +1,8 @@
+"""Input transformer classes to support IPython special syntax.
+
+This includes the machinery to recognise and transform ``%magic`` commands,
+``!system`` commands, ``help?`` querying, prompt stripping, and so forth.
+"""
 import abc
 import functools
 import re
@@ -47,6 +52,9 @@ class InputTransformer(with_metaclass(abc.ABCMeta, object)):
         input or None if the transformer is waiting for more input.
         
         Must be overridden by subclasses.
+
+        Implementations may raise ``SyntaxError`` if the input is invalid. No
+        other exceptions may be raised.
         """
         pass
     
@@ -445,16 +453,15 @@ def _strip_prompts(prompt_re, initial_re=None):
 def classic_prompt():
     """Strip the >>>/... prompts of the Python interactive shell."""
     # FIXME: non-capturing version (?:...) usable?
-    prompt_re = re.compile(r'^(>>> ?|\.\.\. ?)')
-    initial_re = re.compile(r'^(>>> ?)')
+    prompt_re = re.compile(r'^(>>>|\.\.\.)( |$)')
+    initial_re = re.compile(r'^>>>( |$)')
     return _strip_prompts(prompt_re, initial_re)
 
 @CoroutineInputTransformer.wrap
 def ipy_prompt():
     """Strip IPython's In [1]:/...: prompts."""
     # FIXME: non-capturing version (?:...) usable?
-    # FIXME: r'^(In \[\d+\]: | {3}\.{3,}: )' clearer?
-    prompt_re = re.compile(r'^(In \[\d+\]: |\ \ \ \.\.\.+: )')
+    prompt_re = re.compile(r'^(In \[\d+\]: |\ {3,}\.{3,}: )')
     return _strip_prompts(prompt_re)
 
 
@@ -509,9 +516,17 @@ def strip_encoding_cookie():
         while line is not None:
             line = (yield line)
 
+_assign_pat = \
+r'''(?P<lhs>(\s*)
+    ([\w\.]+)                # Initial identifier
+    (\s*,\s*
+        \*?[\w\.]+)*         # Further identifiers for unpacking
+    \s*?,?                   # Trailing comma
+    )
+    \s*=\s*
+'''
 
-assign_system_re = re.compile(r'(?P<lhs>(\s*)([\w\.]+)((\s*,\s*[\w\.]+)*))'
-                              r'\s*=\s*!\s*(?P<cmd>.*)')
+assign_system_re = re.compile(r'{}!\s*(?P<cmd>.*)'.format(_assign_pat), re.VERBOSE)
 assign_system_template = '%s = get_ipython().getoutput(%r)'
 @StatelessInputTransformer.wrap
 def assign_from_system(line):
@@ -522,8 +537,7 @@ def assign_from_system(line):
     
     return assign_system_template % m.group('lhs', 'cmd')
 
-assign_magic_re = re.compile(r'(?P<lhs>(\s*)([\w\.]+)((\s*,\s*[\w\.]+)*))'
-                             r'\s*=\s*%\s*(?P<cmd>.*)')
+assign_magic_re = re.compile(r'{}%\s*(?P<cmd>.*)'.format(_assign_pat), re.VERBOSE)
 assign_magic_template = '%s = get_ipython().magic(%r)'
 @StatelessInputTransformer.wrap
 def assign_from_magic(line):

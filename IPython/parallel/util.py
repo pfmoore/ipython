@@ -1,32 +1,21 @@
-"""some generic utilities for dealing with classes, urls, and serialization
+"""Some generic utilities for dealing with classes, urls, and serialization."""
 
-Authors:
+# Copyright (c) IPython Development Team.
+# Distributed under the terms of the Modified BSD License.
 
-* Min RK
-"""
-#-----------------------------------------------------------------------------
-#  Copyright (C) 2010-2011  The IPython Development Team
-#
-#  Distributed under the terms of the BSD License.  The full license is in
-#  the file COPYING, distributed as part of this software.
-#-----------------------------------------------------------------------------
-
-#-----------------------------------------------------------------------------
-# Imports
-#-----------------------------------------------------------------------------
-
-# Standard library imports.
 import logging
 import os
 import re
 import stat
 import socket
 import sys
+import warnings
 from signal import signal, SIGINT, SIGABRT, SIGTERM
 try:
     from signal import SIGKILL
 except ImportError:
     SIGKILL=None
+from types import FunctionType
 
 try:
     import cPickle
@@ -35,20 +24,17 @@ except:
     cPickle = None
     import pickle
 
-# System library imports
 import zmq
 from zmq.log import handlers
 
+from IPython.utils.log import get_logger
 from IPython.external.decorator import decorator
 
-# IPython imports
 from IPython.config.application import Application
 from IPython.utils.localinterfaces import localhost, is_public_ip, public_ips
 from IPython.utils.py3compat import string_types, iteritems, itervalues
 from IPython.kernel.zmq.log import EnginePUBHandler
-from IPython.kernel.zmq.serialize import (
-    unserialize_object, serialize_object, pack_apply_message, unpack_apply_message
-)
+
 
 #-----------------------------------------------------------------------------
 # Classes
@@ -183,23 +169,48 @@ def split_url(url):
     assert len(lis) == 2, 'Invalid url: %r'%url
     addr,s_port = lis
     return proto,addr,s_port
-    
+
+
 def disambiguate_ip_address(ip, location=None):
-    """turn multi-ip interfaces '0.0.0.0' and '*' into connectable
-    ones, based on the location (default interpretation of location is localhost)."""
-    if ip in ('0.0.0.0', '*'):
-        if location is None or is_public_ip(location) or not public_ips():
-            # If location is unspecified or cannot be determined, assume local
+    """turn multi-ip interfaces '0.0.0.0' and '*' into a connectable address
+    
+    Explicit IP addresses are returned unmodified.
+    
+    Parameters
+    ----------
+    
+    ip : IP address
+        An IP address, or the special values 0.0.0.0, or *
+    location: IP address, optional
+        A public IP of the target machine.
+        If location is an IP of the current machine,
+        localhost will be returned,
+        otherwise location will be returned.
+    """
+    if ip in {'0.0.0.0', '*'}:
+        if not location:
+            # unspecified location, localhost is the only choice
             ip = localhost()
-        elif location:
-            return location
+        elif is_public_ip(location):
+            # location is a public IP on this machine, use localhost
+            ip = localhost()
+        elif not public_ips():
+            # this machine's public IPs cannot be determined,
+            # assume `location` is not this machine
+            warnings.warn("IPython could not determine public IPs", RuntimeWarning)
+            ip = location
+        else:
+            # location is not this machine, do not use loopback
+            ip = location
     return ip
+
 
 def disambiguate_url(url, location=None):
     """turn multi-ip interfaces '0.0.0.0' and '*' into connectable
     ones, based on the location (default interpretation is localhost).
     
-    This is for zeromq urls, such as tcp://*:10101."""
+    This is for zeromq urls, such as ``tcp://*:10101``.
+    """
     try:
         proto,ip,port = split_url(url)
     except AssertionError:
@@ -220,6 +231,15 @@ def interactive(f):
     This results in the function being linked to the user_ns as globals()
     instead of the module globals().
     """
+    
+    # build new FunctionType, so it can have the right globals
+    # interactive functions never have closures, that's kind of the point
+    if isinstance(f, FunctionType):
+        mainmod = __import__('__main__')
+        f = FunctionType(f.__code__, mainmod.__dict__,
+            f.__name__, f.__defaults__,
+        )
+    # associate with __main__ for uncanning
     f.__module__ = '__main__'
     return f
 
@@ -277,7 +297,7 @@ def select_random_ports(n):
 def signal_children(children):
     """Relay interupt/term signals to children, for more solid process cleanup."""
     def terminate_children(sig, frame):
-        log = Application.instance().log
+        log = get_logger()
         log.critical("Got signal %i, terminating children..."%sig)
         for child in children:
             child.terminate()

@@ -13,6 +13,7 @@
 
 from IPython.utils.traitlets import List
 from IPython.config.configurable import LoggingConfigurable
+from IPython.utils.traitlets import Unicode
 
 #-----------------------------------------------------------------------------
 # Classes and functions
@@ -21,17 +22,20 @@ from IPython.config.configurable import LoggingConfigurable
 class NbConvertBase(LoggingConfigurable):
     """Global configurable class for shared config
 
-    Usefull for display data priority that might be use by many trasnformers
+    Useful for display data priority that might be use by many transformers
     """
 
-    display_data_priority = List(['html', 'pdf', 'svg', 'latex', 'png', 'jpg', 'jpeg' , 'text'],
+    display_data_priority = List(['html', 'application/pdf', 'svg', 'latex', 'png', 'jpg', 'jpeg' , 'text'],
             config=True,
               help= """
-                    An ordered list of prefered output type, the first
-                    encounterd will usually be used when converting discarding
+                    An ordered list of preferred output type, the first
+                    encountered will usually be used when converting discarding
                     the others.
                     """
             )
+
+    default_language = Unicode('ipython', config=True,
+       help='DEPRECATED default highlight language, please use kernelspecs instead')
 
     def __init__(self, **kw):
         super(NbConvertBase, self).__init__(**kw)

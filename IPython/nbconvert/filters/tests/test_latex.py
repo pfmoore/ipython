@@ -31,7 +31,7 @@ class TestLatex(TestsBase):
             (r'How are \you doing today?', r'How are \textbackslash{}you doing today?'),
             (r'\escapechar=`\A\catcode`\|=0 |string|foo', r'\textbackslash{}escapechar=`\textbackslash{}A\textbackslash{}catcode`\textbackslash{}|=0 |string|foo'),
             (r'# $ % & ~ _ ^ \ { }', r'\# \$ \% \& \textasciitilde{} \_ \^{} \textbackslash{} \{ \}'),
-            ('...', r'\ldots'),
+            ('...', r'{\ldots}'),
             ('','')]
 
         for test in tests:
@@ -41,5 +41,3 @@ class TestLatex(TestsBase):
     def _try_escape_latex(self, test, result):
         """Try to remove latex from string"""
         self.assertEqual(escape_latex(test), result)
-
-
